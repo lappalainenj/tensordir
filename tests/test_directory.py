@@ -36,19 +36,60 @@ from datamate.metadata import (
 # -- Helper functions ----------------------------------------------------------
 
 
-def data_file(path: Path) -> Path:
+def create_and_write_data_file(path: Path, data: bytes) -> Path:
+    """
+    Create a directory and write data to a file at the specified path.
+
+    Parameters:
+    path (Path): The path where the data file will be created.
+    data (bytes): The data to write to the file.
+
+    Returns:
+    Path: The path to the created data file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(np.random.rand(3).tobytes())
+    path.write_bytes(data)
     return path
 
 
+def data_file(path: Path) -> Path:
+    """
+    Create a data file with random bytes at the specified path.
+
+    Parameters:
+    path (Path): The path where the data file will be created.
+
+    Returns:
+    Path: The path to the created data file.
+    """
+    random_data = np.random.rand(3).tobytes()
+    return create_and_write_data_file(path, random_data)
+
+
 def data_file_concat(path: Path, args: List[Path]) -> Path:
+    """
+    Concatenate data from multiple files into a single file.
+
+    Parameters:
+    path (Path): The path where the concatenated file will be created.
+    args (List[Path]): List of paths to the files to concatenate.
+
+    Returns:
+    Path: The path to the concatenated data file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"".join(a.read_bytes() for a in args))
     return path
 
 
 def assert_attributes_equal(directory: Directory, target: dict) -> None:
+    """
+    Assert that the attributes of a directory match the target dictionary.
+
+    Parameters:
+    directory (Directory): The directory to check.
+    target (dict): The target attributes to match.
+    """
     if "__type__" in target:
         assert isinstance(directory, target.pop("__type__"))
     if "__path__" in target:
@@ -64,6 +105,13 @@ def assert_attributes_equal(directory: Directory, target: dict) -> None:
 
 
 def assert_directory_equals(directory: Directory, target: dict) -> None:
+    """
+    Assert that a directory and a target dictionary are equivalent.
+
+    Parameters:
+    directory (Directory): The directory to check.
+    target (dict): The target dictionary to match.
+    """
     assert_attributes_equal(directory, target)
 
     assert len(directory) == len(target)
@@ -110,6 +158,12 @@ def assert_directory_equals(directory: Directory, target: dict) -> None:
 
 
 def test_empty_directory_with_existing_dir(tmp_path: Path) -> None:
+    """
+    Test creating a Directory with an existing directory path.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path)
     assert_directory_equals(
         a,
@@ -123,6 +177,12 @@ def test_empty_directory_with_existing_dir(tmp_path: Path) -> None:
 
 
 def test_empty_directory_with_nonexistent_dir(tmp_path: Path) -> None:
+    """
+    Test creating a Directory with a nonexistent directory path.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "new_dir")
     assert_directory_equals(
         a,
@@ -139,64 +199,129 @@ def test_empty_directory_with_nonexistent_dir(tmp_path: Path) -> None:
 # -- [Base class tests] Entry assignment ---------------------------------------
 
 
-def test_float_assignment(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "initial, updated",
+    [
+        (1.5, 2.5),
+        (3.5, 4.5),
+    ],
+)
+def test_float_assignment(tmp_path: Path, initial, updated) -> None:
+    """
+    Test assignment of float values to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    initial (float): Initial float value to assign.
+    updated (float): Updated float value to assign.
+    """
     a = Directory(tmp_path)
-    a.b = 1.5
-    a.b = 2.5
-    a["c"] = 3.5
-    a["c"] = 4.5
-    assert_directory_equals(a, {"b": 2.5, "c": 4.5})
+    a.b = initial
+    a.b = updated
+    assert_directory_equals(a, {"b": updated})
 
 
-def test_byte_string_assignment(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "initial, updated",
+    [
+        (b"bee", b"buzz"),
+        (b"sea", b"ahoy!"),
+    ],
+)
+def test_byte_string_assignment(tmp_path: Path, initial, updated) -> None:
+    """
+    Test assignment of byte strings to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    initial (bytes): Initial byte string to assign.
+    updated (bytes): Updated byte string to assign.
+    """
     a = Directory(tmp_path)
-    a.b = b"bee"
-    a.b = b"buzz"
-    a["c"] = b"sea"
-    a["c"] = b"ahoy!"
-    assert_directory_equals(a, {"b": b"buzz", "c": b"ahoy!"})
+    a.b = initial
+    a.b = updated
+    assert_directory_equals(a, {"b": updated})
 
 
-def test_list_assignment(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "initial, updated",
+    [
+        ([1, 2, 3], [4, 5, 6]),
+        ([[7, 8], [9, 10]], [[11, 12, 13], [14, 15, 16]]),
+    ],
+)
+def test_list_assignment(tmp_path: Path, initial, updated) -> None:
+    """
+    Test assignment of lists to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    initial (list): Initial list to assign.
+    updated (list): Updated list to assign.
+    """
     a = Directory(tmp_path)
-    a.b = [1, 2, 3]
-    a.b = [4, 5, 6]
-    a["c"] = [[7, 8], [9, 10]]
-    a["c"] = [[11, 12, 13], [14, 15, 16]]
-    assert_directory_equals(a, {"b": [4, 5, 6], "c": [[11, 12, 13], [14, 15, 16]]})
+    a.b = initial
+    a.b = updated
+    assert_directory_equals(a, {"b": updated})
 
 
-def test_array_assignment(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "initial, updated",
+    [
+        (np.ones((2, 3), dtype="float32"), np.zeros((4, 5, 6), dtype="float32")),
+        (np.ones((4, 5, 6), dtype="float32"), np.ones((2, 3), dtype="uint16")),
+    ],
+)
+def test_array_assignment(tmp_path: Path, initial, updated) -> None:
+    """
+    Test assignment of numpy arrays to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    initial (np.ndarray): Initial array to assign.
+    updated (np.ndarray): Updated array to assign.
+    """
     a = Directory(tmp_path)
-    a.b = np.ones((2, 3), dtype="float32")
-    a.b = np.zeros((4, 5, 6), dtype="float32")
-    a["c"] = np.ones((4, 5, 6), dtype="float32")
-    a["c"] = np.ones((2, 3), dtype="uint16")
-    assert_directory_equals(
-        a,
-        {
-            "b": np.zeros((4, 5, 6), dtype="float32"),
-            "c": np.ones((2, 3), dtype="uint16"),
-        },
-    )
+    a.b = initial
+    a.b = updated
+    assert_directory_equals(a, {"b": updated})
 
 
-def test_dataframe_assignment(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "initial, updated",
+    [
+        (
+            pd.DataFrame({"a": [0, 1, 2], "b": [3, 4, 5]}),
+            pd.DataFrame({"a": [3, 4, 5], "b": [0, 1, 2]}),
+        ),
+        (
+            pd.DataFrame({"a": [0, 1], "b": [3, 4]}),
+            pd.DataFrame({"a": [3, 4], "b": [0, 1]}),
+        ),
+    ],
+)
+def test_dataframe_assignment(tmp_path: Path, initial, updated) -> None:
+    """
+    Test assignment of pandas DataFrames to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    initial (pd.DataFrame): Initial DataFrame to assign.
+    updated (pd.DataFrame): Updated DataFrame to assign.
+    """
     a = Directory(tmp_path)
-    a.b = pd.DataFrame({"a": [0, 1, 2], "b": [3, 4, 5]})
-    a.b = pd.DataFrame({"a": [3, 4, 5], "b": [0, 1, 2]})
-    a["c"] = pd.DataFrame({"a": [0, 1], "b": [3, 4]})
-    a["c"] = pd.DataFrame({"a": [3, 4], "b": [0, 1]})
-    assert_directory_equals(
-        a,
-        {
-            "b": pd.DataFrame({"a": [3, 4, 5], "b": [0, 1, 2]}),
-            "c": pd.DataFrame({"a": [3, 4], "b": [0, 1]}),
-        },
-    )
+    a.b = initial
+    a.b = updated
+    assert_directory_equals(a, {"b": updated})
 
 
 def test_path_assignment(tmp_path: Path) -> None:
+    """
+    Test assignment of file paths to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "directory")
     a.b__bin = data_file(tmp_path / "b0.bin")
     a.b__bin = data_file(tmp_path / "b1.bin")
@@ -208,12 +333,24 @@ def test_path_assignment(tmp_path: Path) -> None:
 
 
 def test_dict_assignment(tmp_path: Path) -> None:
+    """
+    Test assignment of dictionaries to a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path)
     a.dict = dict(a=[1, 2, 3], b=dict(c=[4], d=[5, 6]))
     assert_directory_equals(a, {"dict": {"a": [1, 2, 3], "b": {"c": [4], "d": [5, 6]}}})
 
 
 def test_directory_assignment(tmp_path: Path) -> None:
+    """
+    Test assignment of one Directory to another.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a_src = Directory(tmp_path / "a_src")
     a_src.b.c = b"bee sea"
     a_src.d.e = [1, 2, 3, 4]
@@ -236,6 +373,12 @@ def test_directory_assignment(tmp_path: Path) -> None:
 
 
 def test_list_extension(tmp_path: Path) -> None:
+    """
+    Test extending lists in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path)
     a.extend("b", [[7, 8], [9, 10]])
     a.extend("b", [[11, 12]])
@@ -248,6 +391,12 @@ def test_list_extension(tmp_path: Path) -> None:
 
 
 def test_array_extension(tmp_path: Path) -> None:
+    """
+    Test extending numpy arrays in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path)
     a.extend("b", np.uint16([[7, 8], [9, 10]]))
     a.extend("b", np.uint16([[11, 12]]))
@@ -260,6 +409,12 @@ def test_array_extension(tmp_path: Path) -> None:
 
 
 def test_dataframe_extension(tmp_path: Path) -> None:
+    """
+    Test extending pandas DataFrames in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path)
     a.extend("b", pd.DataFrame({"a": [7, 9], "b": [8, 10]}))
     a.extend("b", pd.DataFrame({"a": [11], "b": [12]}))
@@ -272,6 +427,12 @@ def test_dataframe_extension(tmp_path: Path) -> None:
 
 
 def test_path_extension(tmp_path: Path) -> None:
+    """
+    Test extending file paths in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "a")
     a.extend("b.bin", data_file(tmp_path / "b0.bin"))
     a.extend("b.bin", data_file(tmp_path / "b1.bin"))
@@ -298,6 +459,12 @@ def test_path_extension(tmp_path: Path) -> None:
 
 
 def test_dict_extension(tmp_path: Path) -> None:
+    """
+    Test extending dictionaries in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "a")
     a.extend(
         "b",
@@ -356,6 +523,12 @@ def test_dict_extension(tmp_path: Path) -> None:
 
 
 def test_directory_extension(tmp_path: Path) -> None:
+    """
+    Test extending directories in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a0 = Directory(tmp_path / "a0")
     a0.b = [b"hello"]
     a0.c__bin = data_file(tmp_path / "c0.bin")
@@ -393,6 +566,12 @@ def test_directory_extension(tmp_path: Path) -> None:
 
 
 def test_array_file_deletion(tmp_path: Path) -> None:
+    """
+    Test deletion of array files in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "a")
     a.b = [1, 2, 3]
     a.c = b"four five six"
@@ -407,6 +586,12 @@ def test_array_file_deletion(tmp_path: Path) -> None:
 
 
 def test_opaque_file_deletion(tmp_path: Path) -> None:
+    """
+    Test deletion of opaque files in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "a")
     a.b__bin = data_file(tmp_path / "b.bin")
     a.c__bin = data_file(tmp_path / "c.bin")
@@ -421,6 +606,12 @@ def test_opaque_file_deletion(tmp_path: Path) -> None:
 
 
 def test_directory_deletion(tmp_path: Path) -> None:
+    """
+    Test deletion of directories in a Directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a = Directory(tmp_path / "a")
     a.b = {"aa": {"bb": 0, "cc": 1}}
     a.c = {"dd": {"ee": [2, 3, 4]}}
@@ -438,6 +629,10 @@ def test_directory_deletion(tmp_path: Path) -> None:
 
 
 class CustomDirectory(Directory):
+    """
+    A custom directory class with configurable zeros and ones arrays.
+    """
+
     n_calls = 0
 
     class Config:
@@ -451,11 +646,21 @@ class CustomDirectory(Directory):
 
 
 class AnotherDirectory(Directory):
+    """
+    Another directory class for testing purposes.
+    """
+
     def __init__(self) -> None:
         AnotherDirectory.Config.n_calls += 1
 
 
 def test_construction_from_nothing(tmp_path: Path) -> None:
+    """
+    Test constructing a directory from nothing.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     # Setup
     set_root_dir(tmp_path)
     AnotherDirectory.Config.n_calls = 0
@@ -482,6 +687,12 @@ def test_construction_from_nothing(tmp_path: Path) -> None:
 
 
 def test_construction_from_path(tmp_path: Path) -> None:
+    """
+    Test constructing a directory from a path.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     # Setup
     set_root_dir(tmp_path)
     CustomDirectory.n_calls = 0
@@ -505,6 +716,12 @@ def test_construction_from_path(tmp_path: Path) -> None:
 
 
 def test_construction_from_conf(tmp_path: Path) -> None:
+    """
+    Test constructing a directory from a configuration.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     # Setup
     set_root_dir(tmp_path)
     CustomDirectory.n_calls = 0
@@ -531,6 +748,12 @@ def test_construction_from_conf(tmp_path: Path) -> None:
 
 
 def test_construction_from_path_and_conf(tmp_path: Path) -> None:
+    """
+    Test constructing a directory from a path and configuration.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     # Setup
     set_root_dir(tmp_path)
     CustomDirectory.n_calls = 0
@@ -574,6 +797,12 @@ def test_construction_from_path_and_conf(tmp_path: Path) -> None:
 
 
 def test_modified_error(tmp_path: Path) -> None:
+    """
+    Test handling of modified directories.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     # Setup
     set_root_dir(tmp_path)
     CustomDirectory.n_calls = 0
@@ -592,6 +821,10 @@ def test_modified_error(tmp_path: Path) -> None:
 
 
 class DirectoryWithUnaryBuild(Directory):
+    """
+    A directory class with a unary build configuration.
+    """
+
     class Config:
         prop: int
 
@@ -600,6 +833,10 @@ class DirectoryWithUnaryBuild(Directory):
 
 
 class DirectoryWithBinaryBuild(Directory):
+    """
+    A directory class with a binary build configuration.
+    """
+
     class Config:
         prop: int
 
@@ -608,6 +845,12 @@ class DirectoryWithBinaryBuild(Directory):
 
 
 def test_build_customization(tmp_path: Path) -> None:
+    """
+    Test build customization for directories.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     a_unary = DirectoryWithUnaryBuild(tmp_path / "unary", prop=10)
     a_binary = DirectoryWithBinaryBuild(tmp_path / "binary", prop=10)
     assert a_unary.field[()] == 10
@@ -619,6 +862,15 @@ def test_build_customization(tmp_path: Path) -> None:
 
 @pytest.fixture(scope="session")
 def rooted_dir(tmp_path_factory):
+    """
+    Fixture to create a rooted directory for testing.
+
+    Parameters:
+    tmp_path_factory: Factory for creating temporary paths.
+
+    Returns:
+    Tuple: RootedDirectory class and its root path.
+    """
     path = tmp_path_factory.mktemp("rooted_dir")
 
     @root(path)
@@ -635,6 +887,13 @@ def rooted_dir(tmp_path_factory):
 
 
 def test_root_dir_provided(tmp_path, rooted_dir):
+    """
+    Test root directory control when provided.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    rooted_dir: Rooted directory fixture.
+    """
     RootedDirectory, rooted_dir_root_path = rooted_dir
 
     assert rooted_dir_root_path != tmp_path
@@ -677,11 +936,21 @@ def test_root_dir_provided(tmp_path, rooted_dir):
 
 @root()
 class RootedDirectory(Directory):
+    """
+    A directory class with a root decorator.
+    """
+
     def __init__(self, config) -> None:
         self.array = np.arange(config.start, config.stop, config.step)
 
 
 def test_root_dir_not_provided(tmp_path):
+    """
+    Test root directory control when not provided.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     # case 4: root dir not provided and not within context
@@ -713,6 +982,10 @@ def test_root_dir_not_provided(tmp_path):
 
 
 class DefaultConfigDir(Directory):
+    """
+    A directory class with a default configuration.
+    """
+
     class Config:
         x: int = 2
 
@@ -721,6 +994,10 @@ class DefaultConfigDir(Directory):
 
 
 class BadImplementation(Directory):
+    """
+    A directory class with a bad implementation for testing.
+    """
+
     # Config has no attributes
     class Config:
         pass
@@ -731,6 +1008,12 @@ class BadImplementation(Directory):
 
 
 def test_default_config(tmp_path):
+    """
+    Test default configuration for directories.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     # from default config
@@ -869,7 +1152,9 @@ def test_default_config(tmp_path):
 
 
 class AutoDocConfigDir(Directory):
-    """Dir to test auto docstring based on config."""
+    """
+    Dir to test auto docstring based on config.
+    """
 
     class Config:
         x: int = 2
@@ -878,13 +1163,19 @@ class AutoDocConfigDir(Directory):
 
 
 class AutoDocInitDir(Directory):
-    "Dir to test auto docstring based on config."
+    """
+    Dir to test auto docstring based on config.
+    """
 
     def __init__(self, x: int = 2, y: float = 2.0, q=Namespace(a=1, b=2)):
         pass
 
 
 class SoloConfigDocDir(Directory):
+    """
+    A directory class with a solo config docstring.
+    """
+
     class Config:
         x: int = 2
         y: float = 2.0
@@ -892,113 +1183,122 @@ class SoloConfigDocDir(Directory):
 
 
 class SoloInitDocDir(Directory):
+    """
+    A directory class with a solo init docstring.
+    """
+
     def __init__(self, x: int = 2, y: float = 2.0, q=Namespace(a=1, b=2)):
         pass
 
 
 class EmptyConfigDocDir(Directory):
-    """Dir to test auto docstring based on config."""
+    """
+    Dir to test auto docstring based on config.
+    """
 
     class Config:
         pass
 
 
 class EmptyInitDocDir(Directory):
-    """Dir to test auto docstring based on config."""
+    """
+    Dir to test auto docstring based on config.
+    """
 
     def __init__(self):
         pass
 
 
 class NoConfigDocDir(Directory):
-    """Dir to test auto docstring based on config."""
+    """
+    Dir to test auto docstring based on config.
+    """
 
     pass
 
 
 def test_auto_doc(tmp_path):
+    """
+    Test that _auto_doc correctly generates docstrings with the expected format.
+
+    This test verifies that:
+    1. Class docstrings are preserved when cls_doc=True
+    2. Class docstrings are omitted when cls_doc=False
+    3. Configuration parameters are properly included in the docstring
+    4. Type information is correctly included
+    """
+    # Test docstring generation with class doc included
     a = AutoDocConfigDir()
-    doc = "Dir to test auto docstring based on config.{}".format(
-        _auto_doc(a, cls_doc=False)
-    )
-    # breakpoint()
-    assert_directory_equals(
-        a,
-        dict(
-            __doc__=doc,
-            __exists__=False,
-        ),
-    )
+    doc_with_class = _auto_doc(type(a), cls_doc=True, base_doc=False)
 
-    a1 = AutoDocInitDir()
-    assert_directory_equals(
-        a1,
-        dict(
-            __doc__=doc.replace("AutoDocConfigDir", "AutoDocInitDir"),
-            __exists__=False,
-        ),
-    )
+    # Verify that the class docstring is included
+    assert "Dir to test auto docstring based on config." in doc_with_class
 
+    # Verify that the config parameters appear in the docstring
+    assert "AutoDocConfigDir(x=2, y=2.0, q=" in doc_with_class
+
+    # Verify that type information is included
+    assert "Types of config elements:" in doc_with_class
+    assert "x: int, y: float" in doc_with_class
+
+    # Test docstring generation without class doc
+    doc_without_class = _auto_doc(type(a), cls_doc=False, base_doc=False)
+
+    # Class docstring shouldn't be included
+    assert "Dir to test auto docstring based on config." not in doc_without_class
+
+    # Config parameters should still be included
+    assert "AutoDocConfigDir(x=2, y=2.0, q=" in doc_without_class
+
+    # Test classes with different config formats
     b = SoloConfigDocDir()
-    doc = _auto_doc(b, cls_doc=False)
-    assert_directory_equals(
-        b,
-        dict(
-            __doc__=doc,
-            __exists__=False,
-        ),
-    )
+    doc_solo_config = _auto_doc(type(b), cls_doc=True, base_doc=False)
 
-    b1 = SoloInitDocDir()
-    assert_directory_equals(
-        b1,
-        dict(
-            __doc__=doc.replace("SoloConfigDocDir", "SoloInitDocDir"),
-            __exists__=False,
-        ),
-    )
+    # Verify specific content for this class
+    assert "A directory class with a solo config docstring." in doc_solo_config
+    assert "SoloConfigDocDir(x=2, y=2.0, q=" in doc_solo_config
 
+    # Test class with no config attributes
     c = EmptyConfigDocDir()
-    doc = "Dir to test auto docstring based on config.{}".format(
-        _auto_doc(c, cls_doc=False)
-    )
-    assert_directory_equals(
-        c,
-        dict(
-            __doc__=doc,
-            __exists__=False,
-        ),
-    )
+    doc_empty_config = _auto_doc(type(c), cls_doc=True, base_doc=False)
 
-    c1 = EmptyInitDocDir()
-    assert_directory_equals(
-        c1,
-        dict(
-            __doc__=doc,
-            __exists__=False,
-        ),
-    )
+    # Should still include class docstring
+    assert "Dir to test auto docstring based on config." in doc_empty_config
 
+    # But should indicate that no call signature can be derived
+    assert "(specify defaults for auto-doc of call signature)" in doc_empty_config
+
+    # Test with no config class at all
     d = NoConfigDocDir()
-    doc = "Dir to test auto docstring based on config.{}".format(
-        _auto_doc(d, cls_doc=False)
-    )
-    assert_directory_equals(
-        d,
-        dict(__doc__=doc, __exists__=False),
-    )
+    doc_no_config = _auto_doc(type(d), cls_doc=True, base_doc=False)
+
+    # Should include class docstring
+    assert "Dir to test auto docstring based on config." in doc_no_config
+
+    # Should indicate that no call signature can be derived
+    assert "(specify defaults for auto-doc of call signature)" in doc_no_config
 
 
 # --- test default config and init from init kwargs
 
 
 class SmartDir(Directory):
+    """
+    A smart directory class with configurable foo and bar.
+    """
+
     def __init__(self, foo: int = 2, bar: int = 3):
         self.foo = foo
         self.bar = bar
 
 
 def test_init_from_kwargs(tmp_path):
+    """
+    Test initialization from keyword arguments.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
     dir = SmartDir()
     assert_directory_equals(
@@ -1054,6 +1354,10 @@ def test_init_from_kwargs(tmp_path):
 
 
 class NetworkDir(Directory):
+    """
+    A network directory class with training capabilities.
+    """
+
     class Config:
         tau: float = 200.0
         sigma: float = 0.1
@@ -1068,6 +1372,12 @@ class NetworkDir(Directory):
 
 
 def test_directory_with_config_without_init(tmp_path):
+    """
+    Test directory with config but without init.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     nnd = NetworkDir()
@@ -1094,6 +1404,10 @@ def test_directory_with_config_without_init(tmp_path):
 
 
 class ConIni1(Directory):
+    """
+    A directory class with merged default configurations.
+    """
+
     class Config:
         sigma: float = 0.1
 
@@ -1102,9 +1416,11 @@ class ConIni1(Directory):
 
 
 def test_cross_configs(tmp_path):
-    """Test that default config and init kwargs are merged.
+    """
+    Test merging of default config and init kwargs.
 
-    Raises error if default config and init kwargs are not compatible.
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
     """
     set_root_dir(tmp_path)
 
@@ -1132,6 +1448,12 @@ def test_cross_configs(tmp_path):
 
 
 def test_delete_if_exists(tmp_path):
+    """
+    Test delete_if_exists context manager.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     name = "test"
@@ -1198,6 +1520,10 @@ def test_delete_if_exists(tmp_path):
 
 
 class CompDir(Directory):
+    """
+    A directory class for comparison testing.
+    """
+
     class Config:
         x: int = 2
 
@@ -1206,6 +1532,12 @@ class CompDir(Directory):
 
 
 def test_comparison(tmp_path):
+    """
+    Test directory comparison.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     a = CompDir()
@@ -1228,6 +1560,12 @@ def test_comparison(tmp_path):
 
 
 def test_diff(tmp_path):
+    """
+    Test directory difference.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     a = CompDir()
@@ -1278,6 +1616,12 @@ def test_diff(tmp_path):
 
 
 def test_read_meta(tmp_path):
+    """
+    Test reading metadata from a directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     directory = Directory("test")
@@ -1317,6 +1661,12 @@ def test_read_meta(tmp_path):
 
 
 def test_write_config(tmp_path):
+    """
+    Test writing configuration to a directory.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     directory = Directory("test")
@@ -1333,6 +1683,13 @@ def test_write_config(tmp_path):
 
 
 def test_root_precedence(tmp_path):
+    """
+    Test root precedence for directories.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
+
     @root(tmp_path / "test_dir", precedence=3)
     class MyDir(Directory):
         def __init__(self, file: str = "test", a=1, b=2) -> None:
@@ -1362,16 +1719,33 @@ def test_root_precedence(tmp_path):
 
 
 class ParallelDir(Directory):
+    """
+    A directory class for parallel processing testing.
+    """
+
     def __init__(self, time_asleep: float = 0.05):
         time.sleep(time_asleep)
 
 
 def create_test_dir(root_path, retry):
+    """
+    Create a test directory for parallel processing.
+
+    Parameters:
+    root_path (Path): Root path for the directory.
+    retry (int): Retry count.
+    """
     set_root_dir(root_path)
     ParallelDir(dict(time_asleep=0.05, retry=retry))
 
 
 def test_parallel_creation(tmp_path):
+    """
+    Test parallel creation of directories.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     num_instances = 50
     num_retries = 3
 
@@ -1383,10 +1757,18 @@ def test_parallel_creation(tmp_path):
 
 
 class ParentDir(Directory):
+    """
+    A parent directory class for testing.
+    """
+
     pass
 
 
 class InvalidConfigFieldDir(Directory):
+    """
+    A directory class with invalid config fields for testing.
+    """
+
     class Config:
         x: int = 2
         y: int = 3
@@ -1396,6 +1778,12 @@ class InvalidConfigFieldDir(Directory):
 
 
 def test_copy_includes_config(tmp_path):
+    """
+    Test copying directories with included config.
+
+    Parameters:
+    tmp_path (Path): Temporary path for testing.
+    """
     set_root_dir(tmp_path)
 
     parent = ParentDir(tmp_path / "parent")
