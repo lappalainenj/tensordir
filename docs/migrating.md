@@ -8,6 +8,7 @@ mutable folder and a reader. tensordir splits those roles:
 | datamate | tensordir | role |
 |---|---|---|
 | `Directory` subclass with `__init__(self, ...)` | `Record` subclass with `build(self, spec, **inputs)` | a recipe and its result |
+| a class holding `self.dir = Directory(config)` and writing to it (flyvis `Solver`) | `@td.record` class, or a `mutable = True` record held as `self.record` | an object that fills a record over time |
 | `config` (`Namespace`), `_meta.yaml` | `Spec` (frozen dataclass), `_record.json` | what identifies a result |
 | `Directory(config)` / `Directory(path, config)` | `Record.get(spec)` / `Record.at(path, spec)` | build or reopen |
 | list of directories, `info(Type)` | `Collection` from `Record.query(...)` | many results |
@@ -16,7 +17,8 @@ mutable folder and a reader. tensordir splits those roles:
 | `.custom.where` (flyvis), `where_dataframe` | `tensordir.where` | filter tables, xarray and records |
 
 Paths are content-addressed: `<root>/<RecordName>/<key[:16]>/`. A record is read-only after its
-build; to change a result, change its spec or inputs.
+build unless its class is a workspace record (`mutable = True`); to change a result, change its
+spec or inputs.
 
 ## Use-case map
 
@@ -40,6 +42,8 @@ build; to change a result, change its spec or inputs.
 | | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `build`; `record.nodes` is the DataFrame |
 | **Labeled arrays** | shapes in docstrings, `xarray` built by hand | jaxtyping annotations store dims; `record.to_xarray("x")`, `xr.open_zarr(record.path / "data.zarr")` |
 | **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `build`; `in_place = True` to let readers watch |
+| | `self.dir.loss = losses`, `self.dir.extend(...)` from a `Solver` | `self.record.loss = losses`, `self.record.append(...)` on a workspace record |
+| | `del dir.x`, `dir.rmtree("x")` | `del record.x` (in `build` or on a workspace record) |
 | | checkpoints `chkpts/chkpt_00010` + `extend("chkpt_index", ...)` | `self[f"chkpt_{i:05d}"] = model` + `self.append("chkpt_step", [i])` |
 | **Query many runs** | `collect_all_of_type(T)`, `dir_walk`, `EnsembleDir` children | `T.query(status=None)` |
 | | filtering a list of directories by config | `T.query(model__lr=0.1, seed=[0, 1])`, `collection.where(...)` |
@@ -122,6 +126,41 @@ class Train(td.Record):
                 self[f"chkpt_{step:05d}"] = model
                 self.append("chkpt_step", [step])
 ```
+
+### Objects that hold a directory
+
+```python
+# datamate (flyvis Solver, another project meta runs)
+class Solver:
+    def __init__(self, name, config):
+        self.dir = NetworkDir(name, config)
+        self.config = self.dir.config
+    def checkpoint(self):
+        self.dir.extend("chkpt_index", [self._last_chkpt_ind])
+        self.dir.best_chkpt_index = self._last_chkpt_ind
+```
+
+```python
+# tensordir: the __init__ arguments are the spec, self.record a workspace record
+@td.record
+class Solver:
+    def __init__(self, network: NetworkSpec, task: TaskSpec, n_iters: int = 250_000,
+                 device: Annotated[str, td.field(hashed=False)] = "cuda"):
+        self.network = make_network(network)
+
+    def checkpoint(self, index):
+        self.record[f"chkpt_{index:05d}"] = self.network   # state dict as safetensors
+        self.record.append("chkpt_index", [index])
+        self.record.best_chkpt_index = index
+
+solver = Solver(NetworkSpec(), TaskSpec())          # reopens the run if it exists
+Solver.Record.query(n_iters=250_000)                # every run, by spec
+```
+
+Without the decorator, keep the class as it is and make the record type mutable:
+`class Network(td.Record): mutable = True` and `self.record = Network.at(results / name, spec)`
+(hand-named) or `Network.get(spec)`. See
+[Design](design.md#writes-immutability-and-workspace-records) for the rules.
 
 ### Query, tables and where
 
@@ -218,7 +257,7 @@ Train.query(status="failed").delete()    # or Train.get(spec, retry_failed=True)
 
 | datamate feature | Why not | Instead |
 |---|---|---|
-| Mutating a directory after it is built (`dir.x = ...`, `extend`, `update`, `__delitem__`, `_modified_past_init`) | a result must match its key; edits would silently invalidate it | write everything in `build`; `in_place = True` for progressive writes |
+| Mutating any directory after it is built (`_modified_past_init`) | a result must match its key; edits would silently invalidate it | opt in per record type with `mutable = True`; `in_place = True` for progressive writes during a build |
 | Directory search by config (`_meta.yaml` scan, `Directory(config)` lookup) | slow on large roots and ambiguous | content-addressed keys; `Record.query` and the index for search |
 | `move` | the path is a function of the key | `Record.at` for hand-named directories |
 | Nested `Directory` trees | one record per result keeps keys and status simple | DataFrame, `xarray.Dataset`/`DataTree` fields, or separate records linked as inputs |

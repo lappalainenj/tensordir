@@ -18,7 +18,8 @@ from .errors import (
     TensordirError,
 )
 from .index import reindex
-from .record import Record
+from ._owner import record, transient
+from ._record import Record
 from .spec import Spec, field
 from .view import View, cached_method
 
@@ -60,11 +61,13 @@ __all__ = [
     "get_root",
     "memory",
     "needs_compute",
+    "record",
     "register_codec",
     "register_dims",
     "reindex",
     "root",
     "set_root",
+    "transient",
     "use_root",
     "where",
 ]

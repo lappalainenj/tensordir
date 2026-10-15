@@ -46,7 +46,7 @@ def spec_dict(cls: type, stored: dict) -> dict:
     Records built before a field existed don't store it; reviving the stored spec through the
     class's current `Spec` restores the default, so queries and tables see it.
     """
-    from .record import Record
+    from ._record import Record
 
     if not stored or cls is Record or not issubclass(cls, Record):
         return stored

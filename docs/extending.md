@@ -10,6 +10,7 @@ packages (named in the `# requires:` line) are missing.
 | name array axes that the default rule gets wrong | `register_dims`, a record's `dims`, `Dims` |
 | build a record from other records or arrays | keyword inputs to `Record.get` and `build` |
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
+| let an existing class fill a record over time | `@td.record`, or a `mutable = True` record |
 | change how joblib stores cached results | a subclass of the tensordir store backend |
 
 ## Codecs
@@ -508,6 +509,99 @@ assert list(view.record.load("chkpt_step")) == [20, 40, 60]
 ensemble = td.Collection(Network.get({"seed": seed}) for seed in range(3))
 stacked = ensemble.map(lambda record: NetworkView(record).responses(x), dim="network", coords=["seed"])
 assert stacked.dims == ("network", "stimulus") and list(stacked["seed"].values) == [0, 1, 2]
+```
+
+## Classes that own a record
+
+`@td.record` keeps your class as it is and adds a workspace record keyed by its `__init__`
+arguments (see [Design](design.md#classes-that-own-a-record) for the exact rules). Spec fields
+become attributes; assigning one moves later writes to the record for the new spec.
+
+```python
+# requires: torch safetensors
+from typing import Annotated
+
+import torch
+
+import tensordir as td
+
+td.set_root("results")
+
+
+@td.record
+class Trainer:
+    def __init__(
+        self,
+        lr: float = 1e-2,
+        n_hidden: int = 16,
+        seed: int = 0,
+        device: Annotated[str, td.field(hashed=False)] = "cpu",  # not in the key
+        verbose: Annotated[bool, td.transient] = False,  # not in the spec at all
+    ):
+        self.verbose = verbose
+
+    def train(self, n_steps: int = 40) -> float:
+        if "summary" in self.record:  # finished earlier, maybe by another process
+            return self.record.summary["final_loss"]
+        torch.manual_seed(self.seed)
+        model = torch.nn.Sequential(torch.nn.Linear(1, self.n_hidden), torch.nn.Tanh(), torch.nn.Linear(self.n_hidden, 1))
+        optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
+        x = torch.linspace(-1, 1, 64)[:, None]
+        for _ in range(n_steps):
+            optimizer.zero_grad()
+            loss = torch.nn.functional.mse_loss(model(x), torch.sin(3 * x))
+            loss.backward()
+            optimizer.step()
+            self.record.append("loss", [loss.item()])
+        self.record.model = model  # state dict as safetensors
+        self.record.summary = {"final_loss": loss.item()}
+        return loss.item()
+
+
+trainer = Trainer(verbose=True)
+first = trainer.train()
+assert Trainer().train() == first  # same spec: reopened, not retrained
+
+trainer.lr = 3e-2  # a new spec: the next writes go to a new record
+trainer.train()
+assert trainer.record.spec.lr == 3e-2
+
+table = Trainer.Record.query().table(sizes=False, varying_only=True)
+assert sorted(table["spec.lr"]) == [1e-2, 3e-2]
+assert len(Trainer.Record.query(lr=1e-2).where(lambda r: "model" in r)) == 1
+```
+
+The same without the decorator: give an ordinary record class `mutable = True` and hold it.
+
+```python
+import numpy as np
+
+import tensordir as td
+
+td.set_root("results")
+
+
+class Run(td.Record):
+    __record_name__ = "Run"
+    mutable = True  # fields may change after the (empty) build
+
+    class Spec(td.Spec):
+        lr: float = 0.1
+
+
+class Solver:
+    def __init__(self, lr: float):
+        self.record = Run.get({"lr": lr})  # or Run.at(path, {"lr": lr}) for a hand-named directory
+
+    def step(self, losses):
+        self.record.losses = np.asarray(losses)
+
+
+solver = Solver(0.1)
+solver.step([1.0, 0.5])
+assert list(Run.get({"lr": 0.1}).load("losses")) == [1.0, 0.5]
+del solver.record.losses
+assert "losses" not in solver.record
 ```
 
 ## joblib store backend

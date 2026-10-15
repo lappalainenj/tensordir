@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ._root import get_root
 from .codecs import atomic_path
-from .record import INTERNAL, META, _read_json
+from ._record import INTERNAL, META, _read_json
 
 __all__ = ["reindex", "records", "index_path"]
 

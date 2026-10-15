@@ -77,6 +77,80 @@ An exception in `build` stores a `failed` record with the traceback. `KeyboardIn
 the build runs (training logs). A rebuild after a crash keeps what the earlier attempt wrote,
 which lets a recipe resume from checkpoints.
 
+## Writes, immutability and workspace records
+
+`record.name = value`, `record["name"] = value` and `record.write(name, value)` store a field with
+the codec chosen by the value's type; `record.append(name, rows)` grows an array along axis 0;
+`del record.name`, `del record["name"]` and `record.delete_field(name)` remove one. Private names
+(`_x`) and class attributes (`path`, `spec`, methods) are not fields; assigning them follows normal
+Python rules. Reading `record.name` returns the stored value (numpy for typed array fields).
+
+Who may write:
+
+| record | inside `build` | after the build is `done` |
+|---|---|---|
+| default | yes | no: `ReadOnlyError` |
+| `in_place = True` | yes; readers see each write | no |
+| `mutable = True` (workspace) | yes | yes, from any handle and process |
+
+A finished record is immutable by default because its key promises its contents: the same spec
+and inputs give the same fields. A **workspace record** (`mutable = True`) gives up that promise
+for the use datamate served: an object (a trainer, a solver) holds a record and writes losses,
+checkpoints and summaries into it over time. Rules:
+
+- Without a `build`, `get` creates an empty `done` record; edits start right away.
+- Each edit takes the record's lease, re-reads `_record.json`, writes the field, stores the new
+  manifest atomically with a `modified` timestamp, and releases the lease. Edits from many
+  handles, threads or processes therefore never lose each other's fields; the last write to the
+  same field wins.
+- Edits need status `done`. A record that is `running` (being built elsewhere), `failed` or
+  `stale` raises `ReadOnlyError`.
+- Handles notice edits by the mtime of `_record.json`; immutable records cache their manifest
+  forever.
+- Writing an array over a field created by `append` replaces its rows and keeps it appendable.
+- Dimension sizes are checked at the end of a build, not on later edits.
+- Array fields are written in place, so a reader can see a partly written array during an edit.
+  File codecs (json, parquet, safetensors) replace their file atomically.
+
+## Classes that own a record
+
+`@td.record` turns a regular class into one whose `__init__` arguments are a spec and whose
+`self.record` is a workspace record for that spec; it is datamate's `Directory.__init__` without
+the build-once semantics.
+
+```python
+@td.record
+class Trainer:
+    def __init__(self, lr: float = 0.1, n_steps: int = 100,
+                 device: Annotated[str, td.field(hashed=False)] = "cpu",
+                 logger: Annotated[Logger | None, td.transient] = None):
+        self.model = make_model()
+```
+
+- **Spec attributes.** Every named `__init__` argument is a field of the generated `Trainer.Spec`,
+  typed by its annotation (`Any` without one), with its default. Exceptions:
+  `Annotated[T, td.transient]` arguments stay plain arguments. `*args` and `**kwargs`, and the
+  names `record`, `spec`, `Spec`, `Record`, are rejected.
+- **Key options.** `td.field(..., hashed=False)` or `since=` as the default, or inside
+  `Annotated[T, td.field(hashed=False)]`, work as in a `Spec`.
+- **Attributes.** Each spec field is a property backed by `self.spec`. `trainer.lr` reads it;
+  `trainer.lr = 0.2` (also inside `__init__`) replaces the spec with `spec.replace(lr=0.2)`. If
+  the key changes, the next `trainer.record` is the record for the new spec; earlier handles keep
+  pointing at the old record. Changing an unhashed field keeps the record.
+- **Records.** `trainer.record` calls `Trainer.Record.get(trainer.spec)` on first use, so nothing
+  is written for objects that never touch it, and the root is resolved at that moment.
+  `Trainer.Record` is a `mutable` record type named `Trainer` (or `name=`), with `root=`,
+  `schema_version=` and a `base=` record class for typed fields, `dims` and codecs.
+- **Build and reopen.** `__init__` runs on every construction; it is not a build. Constructing
+  `Trainer(lr=0.1)` again, in any process, reopens the same record with everything written so
+  far, so a training loop can resume or skip finished work (`"loss" in trainer.record`). A
+  `base=` class with a `build` and `mutable=False` gives build-once records instead.
+- **Threads.** Creating and switching the record is locked per instance, and record edits are
+  serialized by the lease. Changing spec attributes while other threads write through
+  `obj.record` is still a race: their writes go to whichever record they fetched.
+- Instances pickle with their spec; the record is reopened on first use after unpickling.
+  Decorated subclasses get their own spec from their own `__init__`.
+
 ## Concurrency on shared filesystems
 
 - **Leases.** A lease is a directory created with `mkdir`, which is atomic on local disks, NFS and

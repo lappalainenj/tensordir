@@ -5,7 +5,7 @@ import pytest
 
 import tensordir as td
 from tensordir import _root
-from tensordir.record import INTERNAL
+from tensordir._record import INTERNAL
 
 
 @pytest.fixture

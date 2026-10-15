@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import _lease, index
 from ._root import get_root
-from .record import INTERNAL
+from ._record import INTERNAL
 
 __all__ = ["main"]
 

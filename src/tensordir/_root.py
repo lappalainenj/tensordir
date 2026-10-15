@@ -62,7 +62,7 @@ def root(path: str | os.PathLike | None) -> Callable[[type], type]:
     resolved = None if path is None else Path(path).expanduser().absolute()
 
     def decorate(cls: type) -> type:
-        from .record import Record
+        from ._record import Record
 
         target = getattr(cls, "Record", None) if getattr(cls, "__tensordir_owner__", False) else cls
         if not (isinstance(target, type) and issubclass(target, Record)):

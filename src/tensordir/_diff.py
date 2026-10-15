@@ -62,7 +62,7 @@ class SpecDiff:
 
 def _as_dict(obj: Any, hashed: bool) -> dict:
     from .collection import spec_dict
-    from .record import Record
+    from ._record import Record
     from .spec import Spec
     from .view import View
 
