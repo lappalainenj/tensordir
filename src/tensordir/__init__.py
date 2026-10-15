@@ -3,6 +3,7 @@
 from ._canonical import Digest
 from ._root import get_root, set_root, use_root
 from .codecs import Codec, register_codec
+from .collection import Collection
 from .dims import Dims, dim_name, dims_for, register_dims
 from .errors import (
     BuildFailed,
@@ -14,8 +15,10 @@ from .errors import (
     RootNotSet,
     TensordirError,
 )
+from .index import reindex
 from .record import Record
 from .spec import Spec, field
+from .view import View, cached_method
 
 
 def memory(location, *, lazy: bool = True, **kwargs):
@@ -34,6 +37,7 @@ __all__ = [
     "BuildFailed",
     "CanonicalizationError",
     "Codec",
+    "Collection",
     "Digest",
     "Dims",
     "DimsError",
@@ -44,6 +48,8 @@ __all__ = [
     "RootNotSet",
     "Spec",
     "TensordirError",
+    "View",
+    "cached_method",
     "dim_name",
     "dims_for",
     "field",
@@ -52,6 +58,7 @@ __all__ = [
     "needs_compute",
     "register_codec",
     "register_dims",
+    "reindex",
     "set_root",
     "use_root",
 ]

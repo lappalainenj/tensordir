@@ -11,7 +11,8 @@ import xarray as xr
 from joblib._store_backends import FileSystemStoreBackend
 
 import tensordir as td
-from tensordir._memory import TensordirStoreBackend, needs_compute
+from tensordir import needs_compute
+from tensordir._memory import TensordirStoreBackend
 from _records import Square
 
 

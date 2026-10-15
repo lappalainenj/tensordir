@@ -26,7 +26,7 @@ from joblib._store_backends import CacheWarning, FileSystemStoreBackend
 
 from .codecs import atomic_path
 
-__all__ = ["memory", "needs_compute", "TensordirStoreBackend", "BACKEND"]
+__all__ = ["memory", "TensordirStoreBackend", "BACKEND"]
 
 BACKEND = "tensordir"
 ZARR, PARQUET, H5, PICKLE = "output.zarr", "output.parquet", "output.h5", "output.pkl"
@@ -163,8 +163,3 @@ def memory(location: str | os.PathLike, *, lazy: bool = True, **kwargs: Any) -> 
     """
     options = {"lazy": lazy, **kwargs.pop("backend_options", {})}
     return Memory(location=str(location), backend=BACKEND, backend_options=options, **kwargs)
-
-
-def needs_compute(func: Any, *args: Any, **kwargs: Any) -> bool:
-    """Whether calling the memoized `func` with these arguments would compute (not load)."""
-    return not func.check_call_in_cache(*args, **kwargs)
