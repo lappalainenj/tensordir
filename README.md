@@ -12,7 +12,7 @@ tensordir succeeds [datamate](https://github.com/flyvis/datamate), which grew ou
 Not yet on PyPI. From a clone:
 
 ```bash
-uv sync --all-extras          # core: numpy, zarr>=3; extras: xarray, memory, tables, typing, legacy, torch
+uv sync --all-extras          # core: numpy, zarr>=3; extras: xarray, memory, tables, typing, legacy, torch, delta, hdf5
 uv run pytest
 ```
 

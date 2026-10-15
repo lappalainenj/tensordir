@@ -66,6 +66,8 @@
 
 ::: tensordir.register_codec
 
+::: tensordir.codecs.Hdf5Codec
+
 ::: tensordir.legacy
 
 ::: tensordir.errors

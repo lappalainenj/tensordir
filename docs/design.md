@@ -51,7 +51,7 @@ The root never enters the key: the same record can be copied between roots.
 ```
 <root>/<RecordName>/<key[:16]>/_record.json   # key, spec, inputs, status, fields, provenance
 <root>/<RecordName>/<key[:16]>/data.zarr/     # arrays and xarray groups (zarr v3)
-<root>/<RecordName>/<key[:16]>/<name>.json|.parquet|.safetensors|.pkl
+<root>/<RecordName>/<key[:16]>/<name>.json|.parquet|.safetensors|.h5|.pkl
 <root>/.tensordir/locks/  tmp/  index.parquet
 ```
 
@@ -180,11 +180,32 @@ Tests cover six processes racing for one record (exactly one build), SIGKILL dur
 | JSON scalars, lists, str-keyed dicts | `json` | `<name>.json` |
 | `torch.nn.Module`, `{str: Tensor}` | `safetensors` | `<name>.safetensors` (state dict) |
 | anything | `pickle` | `<name>.pkl`, only with `write(name, value, codec="pickle")` |
+| `numpy.ndarray` | `hdf5` | `<name>.h5`, dataset `data` with dimension labels; opt-in |
 
 `record["x"]` returns a lazy handle: a `zarr.Array`, an xarray object opened without loading, or
 a `pyarrow.dataset.Dataset` for `arrow` fields. `record.x` returns the declared type: an ndarray
 for jaxtyping numpy fields. `record.load("x")` always loads. `register_codec` adds codecs, and
 later registrations are tried first.
+
+### HDF5 output (opt-in)
+
+For h5-based tools, a record type can store its arrays as HDF5 with
+`codecs = {"ndarray": "hdf5"}`, or one field with `write(name, array, codec="hdf5")`
+(`pip install 'tensordir[hdf5]'`). Each field is `<name>.h5` with a single dataset `data`, the
+layout datamate wrote, and its dimension names as HDF5 dimension labels. Zarr stays the
+default because HDF5 trades away what matters on clusters:
+
+- **File locking.** HDF5 locks files with `flock`/`fcntl`, which is unreliable or disabled on
+  NFS and Lustre and can hang or fail readers. tensordir opens files with `locking=False`; other
+  tools may need `HDF5_USE_FILE_LOCKING=FALSE`.
+- **Single writer.** One process writes a file at a time, and every write rewrites the whole
+  file (atomically, by rename). Zarr writes each chunk as its own object.
+- **No chunk-parallel writes.** Many workers cannot fill one HDF5 array concurrently; with zarr
+  they can write disjoint chunks.
+- **No appends.** `append` always creates zarr arrays, also under `codecs = {"ndarray": "hdf5"}`.
+- **Open handles.** `record["x"]` (and `record.x` for fields not typed as numpy arrays) returns
+  an `h5py.Dataset` whose file stays open until the handle is dropped; `record.load("x")` and
+  typed numpy fields read into memory and close the file.
 
 ## External tables
 

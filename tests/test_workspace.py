@@ -107,6 +107,12 @@ def test_concurrent_edits_keep_every_field(root):
 
 
 def test_workspace_edits_need_a_finished_build(root):
+    class NoBuild(td.Record):
+        __record_name__ = "WorkspaceNoBuild"
+
+    with pytest.raises(td.BuildFailed, match="NotImplementedError"):
+        NoBuild.get()  # only workspace records may leave out build()
+
     seen = {}
 
     class Slow(td.Record):

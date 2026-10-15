@@ -1,6 +1,6 @@
 # Extending tensordir
 
-Five extension points, each with a complete script. Every script on this page runs as-is in an
+The extension points below each come with a complete script. Every script on this page runs as-is in an
 empty directory; `tests/test_docs_examples.py` executes them, skipping those whose optional
 packages (named in the `# requires:` line) are missing.
 

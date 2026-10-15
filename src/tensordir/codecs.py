@@ -9,6 +9,7 @@
 | JSON scalars, lists, str-keyed dicts | `json` | `<name>.json` |
 | `torch.nn.Module` or `{str: torch.Tensor}` | `safetensors` | `<name>.safetensors` (state dict) |
 | anything | `pickle` | `<name>.pkl`, only when asked for with `codec="pickle"` |
+| `numpy.ndarray` | `hdf5` | `<name>.h5`, only when asked for (`codec="hdf5"` or a record's `codecs`) |
 
 Register more with `register_codec`; later registrations take precedence.
 """
@@ -341,6 +342,45 @@ class PickleCodec(FileCodec):
             return pickle.load(f)
 
 
+class Hdf5Codec(FileCodec):
+    """Opt-in: arrays as `<name>.h5` holding one dataset `data` (datamate's layout), with
+    dimension labels, for h5-based tools. Choose it per field (`write(..., codec="hdf5")`) or per
+    record type (`codecs = {"ndarray": "hdf5"}`); zarr stays the default.
+
+    Trade-offs against zarr: HDF5 file locking misbehaves on NFS and Lustre (tensordir opens
+    files with `locking=False`; other readers may need `HDF5_USE_FILE_LOCKING=FALSE`); a file has
+    a single writer and each write rewrites the whole file; chunks cannot be written in parallel;
+    `append` stays zarr; and a lazy read keeps the file open until the handle is dropped.
+    """
+
+    name = "hdf5"
+    suffix = ".h5"
+
+    def write(self, directory, name, value, *, dims=None):
+        import h5py
+
+        value = np.asarray(value)
+        if value.dtype.hasobject:
+            raise TypeError(f"{name}: object arrays have no HDF5 form")
+        if dims is not None and len(dims) != value.ndim:
+            raise DimsError(f"{name}: {value.ndim}-d array with dims {tuple(dims)}")
+        with atomic_path(self.path(directory, name)) as tmp:
+            with h5py.File(tmp, "w", locking=False) as f:
+                dataset = f.create_dataset("data", data=value)
+                for axis, label in enumerate(dims or ()):
+                    dataset.dims[axis].label = label
+        return {"dims": list(dims) if dims else None, "shape": list(value.shape), "dtype": value.dtype.str}
+
+    def read(self, directory, name, info, *, lazy=True):
+        import h5py
+
+        f = h5py.File(self.path(directory, name), "r", locking=False)
+        if lazy:
+            return f["data"]
+        with f:
+            return f["data"][()]
+
+
 _CODECS: dict[str, Codec] = {}
 
 
@@ -370,7 +410,9 @@ def codec_for(value: Any) -> Codec:
     )
 
 
-for _codec in (PickleCodec(), SafetensorsCodec(), JsonCodec(), ParquetCodec(), ArrowCodec(), XarrayCodec(), NdarrayCodec()):
+for _codec in (
+    Hdf5Codec(), PickleCodec(), SafetensorsCodec(), JsonCodec(), ParquetCodec(), ArrowCodec(), XarrayCodec(), NdarrayCodec()
+):
     register_codec(_codec)
 
 

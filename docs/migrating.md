@@ -264,7 +264,7 @@ Train.query(status="failed").delete()    # or Train.get(spec, retry_failed=True)
 | `move` | the path is a function of the key | `Record.at` for hand-named directories |
 | Nested `Directory` trees | one record per result keeps keys and status simple | DataFrame, `xarray.Dataset`/`DataTree` fields, or separate records linked as inputs |
 | `Namespace` (mutable attribute dict), `namespacify`, `without`, `walk`, `is_subset` | specs are frozen, typed dataclasses | `Spec`, `spec.replace(...)`, `spec.flat()`, `td.diff` |
-| HDF5 writing, SWMR | locking problems on shared filesystems | zarr v3; `tensordir.legacy` reads old HDF5 |
+| SWMR HDF5, HDF5 by default | locking problems on shared filesystems | zarr v3; opt-in HDF5 output with `codecs = {"ndarray": "hdf5"}` ([trade-offs](design.md#hdf5-output-opt-in)); `tensordir.legacy` reads old HDF5 |
 | Equality of directory contents (`assert_equal_directories`, `Directory.__eq__`) | records compare by type, key and path | compare fields explicitly, or keys |
 | `delete_if_exists`, `y_n` prompts | implicit deletion during construction is easy to trigger by accident | `record.delete()` / `collection.delete()` explicitly |
 | `datamate` import aliases | a different object model; aliases would mislead | this page |

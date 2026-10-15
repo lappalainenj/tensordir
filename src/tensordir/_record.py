@@ -125,6 +125,10 @@ class Record:
     #: any process; each edit holds the lease briefly). The key still names the spec and inputs,
     #: but no longer guarantees the contents. Without a `build`, `get` creates an empty record.
     mutable: ClassVar[bool] = False
+    #: Codec replacements for values written without `codec=`, by the name of the codec that
+    #: would be chosen: `{"ndarray": "hdf5"}` stores arrays as HDF5 files instead of zarr (see
+    #: `tensordir.codecs.Hdf5Codec` for the trade-offs). `append` always uses zarr.
+    codecs: ClassVar[Mapping[str, str]] = {}
 
     Spec: ClassVar[type[_Spec]] = _EmptySpec
 
@@ -294,7 +298,7 @@ class Record:
         Workspace records (`mutable = True`) may leave it out: their fields come later."""
         if type(self).mutable:
             return
-        raise NotImplementedError(f"{type(self).__qualname__} does not define build()")(f"{type(self).__qualname__} does not define build()")
+        raise NotImplementedError(f"{type(self).__qualname__} does not define build()")
 
     def _obtain(self, inputs: dict, *, block: bool, timeout: float | None, retry_failed: bool) -> Self:
         cls = type(self)
@@ -612,6 +616,8 @@ class Record:
             if dims is None:
                 dims = dims_for(annotation, type(self).dims)
         chosen = get_codec(codec) if codec else codec_for(value)
+        if codec is None and chosen.name in type(self).codecs:
+            chosen = get_codec(type(self).codecs[chosen.name])
         with self._edit() as fields:
             old = fields.get(name)
             if old is not None and old.get("append") and codec is None and chosen.name == "ndarray":
