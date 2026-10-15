@@ -10,7 +10,8 @@ import traceback
 import types
 import typing
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
 
@@ -117,6 +118,13 @@ class Record:
     heartbeat_interval: ClassVar[float | None] = None
     #: Size-name → dimension-name overrides for this record's typed fields.
     dims: ClassVar[Mapping[str, str]] = {}
+    #: Default root of this record type (also set by `@tensordir.root(path)`). `root=` arguments
+    #: and `use_root` blocks take precedence; `set_root` and `$TENSORDIR_ROOT` apply without it.
+    root: ClassVar[str | os.PathLike | None] = None
+    #: Workspace record: fields may be written, appended and deleted after the build is done (by
+    #: any process; each edit holds the lease briefly). The key still names the spec and inputs,
+    #: but no longer guarantees the contents. Without a `build`, `get` creates an empty record.
+    mutable: ClassVar[bool] = False
 
     Spec: ClassVar[type[_Spec]] = _EmptySpec
 
@@ -192,17 +200,23 @@ class Record:
             tmp = path.parent
         state = {
             "_path": path, "_dir": path, "_key": key, "_spec": spec, "_lock": lock, "_tmp": tmp,
-            "_writable": False, "_meta": None, "_done_meta": None,
+            "_writable": False, "_meta": None, "_done_meta": None, "_done_mtime": None,
         }
         self.__dict__.update(state)
         return self
+
+    @classmethod
+    def resolve_root(cls, root: str | os.PathLike | None = None) -> Path:
+        """Where records of this type live: `root`, else the innermost `use_root`, else the class's
+        `root`, else `set_root`, else `$TENSORDIR_ROOT`."""
+        return get_root(root, class_root=cls.root)
 
     @classmethod
     def locate(cls, spec: Any = None, /, *, root: str | os.PathLike | None = None, **inputs: Any) -> Self:
         """The record for `spec` and `inputs`, whatever its status; nothing is built."""
         spec = cls._coerce_spec(spec)
         key = cls._key_of(spec, cls._identify(inputs))
-        base = get_root(root)
+        base = cls.resolve_root(root)
         return cls._new(base / cls.dirname() / key[:16], key=key, managed_root=base, spec=spec)
 
     # ----- build or reopen -------------------------------------------------------------------
@@ -263,7 +277,8 @@ class Record:
 
     @classmethod
     def query(cls, *, root: str | os.PathLike | None = None, status: str | None = "done", **filters: Any):
-        """A `Collection` of this type's records whose flattened spec matches `filters`.
+        """A `Collection` of this type's records under `resolve_root(root)` whose flattened spec
+        matches `filters`.
 
         Filter names use `__` for nesting (`model__lr=0.1`). Values follow `tensordir.where`:
         equality, any of a list (`seed=[0, 1]`), comparisons (`lr=">1e-3, <0.1"`), a compiled
@@ -274,8 +289,12 @@ class Record:
         return query(cls, root=root, status=status, **filters)
 
     def build(self, spec: Any, **inputs: Any) -> None:
-        """The recipe. Write fields with `self.name = value`, `self["name"] = value` or `append`."""
-        raise NotImplementedError(f"{type(self).__qualname__} does not define build()")
+        """The recipe. Write fields with `self.name = value`, `self["name"] = value` or `append`.
+
+        Workspace records (`mutable = True`) may leave it out: their fields come later."""
+        if type(self).mutable:
+            return
+        raise NotImplementedError(f"{type(self).__qualname__} does not define build()")(f"{type(self).__qualname__} does not define build()")
 
     def _obtain(self, inputs: dict, *, block: bool, timeout: float | None, retry_failed: bool) -> Self:
         cls = type(self)
@@ -329,6 +348,7 @@ class Record:
             "started": _now(),
             "finished": None,
             "duration_s": None,
+            "modified": None,
             "error": None,
             "provenance": _provenance.collect(cls),
         }
@@ -417,7 +437,14 @@ class Record:
         return self._spec
 
     def _disk_meta(self) -> dict | None:
-        if self._done_meta is not None:
+        mutable = type(self).mutable
+        mtime = None
+        if mutable:  # edits rewrite _record.json: trust the cache only while its mtime holds
+            try:
+                mtime = (self._path / META).stat().st_mtime_ns
+            except (FileNotFoundError, NotADirectoryError):
+                mtime = None
+        if self._done_meta is not None and (not mutable or mtime == self._done_mtime):
             return self._done_meta
         meta = _read_json(self._path / META)
         if meta is None:
@@ -425,7 +452,7 @@ class Record:
         if self._key is not None and meta.get("key") != self._key:
             raise KeyCollision(f"{self._path} holds key {meta.get('key')}, expected {self._key}")
         if meta.get("status") == "done":
-            self.__dict__["_done_meta"] = meta
+            self.__dict__.update(_done_meta=meta, _done_mtime=mtime)
         return meta
 
     @property
@@ -500,25 +527,84 @@ class Record:
         raise AttributeError(f"{type(self).__qualname__!r} has no attribute or field {name!r}")
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name in type(self)._typed_fields():
-            self.write(name, value)
-        else:
+        """`record.name = value` writes field `name`, except for private names and class attributes."""
+        if name.startswith("_") or (name not in type(self)._typed_fields() and hasattr(type(self), name)):
             object.__setattr__(self, name, value)
+        else:
+            self.write(name, value)
+
+    def __delattr__(self, name: str) -> None:
+        """`del record.name` deletes field `name` (in `build`, or on a workspace record)."""
+        if name.startswith("_") or name in self.__dict__:
+            object.__delattr__(self, name)
+        elif name in self._manifest():
+            self.delete_field(name)
+        else:
+            raise AttributeError(f"{self!r} has no field {name!r}")
 
     def __setitem__(self, name: str, value: Any) -> None:
         self.write(name, value)
 
+    def __delitem__(self, name: str) -> None:
+        self.delete_field(name)
+
     def __dir__(self):
         return sorted(set(super().__dir__()) | set(self._manifest()))
 
-    def _check_writable(self) -> None:
-        if not self._writable:
-            raise ReadOnlyError(f"{self!r} is read-only; write fields inside build()")
+    @contextmanager
+    def _edit(self) -> Iterator[dict]:
+        """Yield the field manifest for changes and persist it afterwards.
+
+        Inside `build` this is the build's manifest. On a finished workspace record it is the
+        manifest on disk, re-read under the record's lease, which is held until the edit ends.
+        """
+        if self._writable:
+            yield self._meta["fields"]
+            self._write_meta()
+            return
+        cls = type(self)
+        if not cls.mutable:
+            raise ReadOnlyError(
+                f"{self!r} is read-only: write fields inside build(), or set `mutable = True` on "
+                f"{cls.__qualname__} to make it a workspace record"
+            )
+        status = self.status
+        if status != "done":
+            raise ReadOnlyError(f"{self!r} is {status}; a workspace record takes edits once its build is done")
+        lease = self._edit_lease()
+        try:
+            meta = _read_json(self._path / META)
+            if meta is None or meta.get("key") != self.key:
+                raise ReadOnlyError(f"{self!r} disappeared or was replaced during the edit")
+            self.__dict__.update(_dir=self._path, _meta=meta)
+            yield meta["fields"]
+            meta["modified"] = _now()
+            self._write_meta()
+        finally:
+            self.__dict__.update(_meta=None, _done_meta=None)
+            lease.release()
+
+    def _edit_lease(self) -> Lease:
+        cls = type(self)
+        deadline = time.monotonic() + cls.lease_ttl
+        delay = 0.005
+        while True:
+            lease = Lease.acquire(self._lock, ttl=cls.lease_ttl, heartbeat=cls.heartbeat_interval)
+            if lease is not None:
+                return lease
+            if time.monotonic() >= deadline:
+                raise RecordBusy(self)
+            time.sleep(delay)
+            delay = min(delay * 2, 0.5)
 
     def write(self, name: str, value: Any, *, codec: str | None = None, dims: tuple[str, ...] | None = None) -> None:
-        """Store `value` as field `name` (inside `build` only). The codec follows the value's type
-        unless given; `dims` overrides the dimension names derived from the field annotation."""
-        self._check_writable()
+        """Store `value` as field `name`, replacing any earlier value.
+
+        Allowed inside `build`, and on finished workspace records (`mutable = True`); elsewhere it
+        raises `ReadOnlyError`. The codec follows the value's type unless given; `dims` overrides
+        the dimension names derived from the field annotation. An array written over a field
+        created by `append` replaces its rows and stays appendable.
+        """
         _validate_name(name)
         annotation = type(self)._typed_fields().get(name)
         if annotation is not None:
@@ -526,27 +612,38 @@ class Record:
             if dims is None:
                 dims = dims_for(annotation, type(self).dims)
         chosen = get_codec(codec) if codec else codec_for(value)
-        old = self._manifest().get(name)
-        if old is not None and old["codec"] != chosen.name:
-            get_codec(old["codec"]).delete(self._dir, name, old)
-        info = chosen.write(self._dir, name, value, dims=dims)
-        self._manifest()[name] = {"codec": chosen.name, **info}
-        self._write_meta()
+        with self._edit() as fields:
+            old = fields.get(name)
+            if old is not None and old.get("append") and codec is None and chosen.name == "ndarray":
+                get_codec("ndarray").delete(self._dir, name, old)
+                fields[name] = {"codec": "ndarray", **append_array(self._dir, name, value, dims=dims)}
+                return
+            if old is not None and old["codec"] != chosen.name:
+                get_codec(old["codec"]).delete(self._dir, name, old)
+            info = chosen.write(self._dir, name, value, dims=dims)
+            fields[name] = {"codec": chosen.name, **info}
 
     def append(self, name: str, values: Any, *, dims: tuple[str, ...] | None = None, chunk: int = 1024) -> None:
         """Append rows (axis 0) to array field `name`, creating it on first use. With `in_place`
-        records, readers see appended rows while the build runs (training logs)."""
-        self._check_writable()
+        records, readers see appended rows while the build runs (training logs); workspace records
+        accept appends after the build too."""
         _validate_name(name)
         annotation = type(self)._typed_fields().get(name)
         if dims is None and annotation is not None:
             dims = dims_for(annotation, type(self).dims)
-        old = self._manifest().get(name)
-        if old is not None and not old.get("append"):
-            raise ValueError(f"{name!r} was written with write(); append() needs a field created by append()")
-        info = append_array(self._dir, name, values, dims=dims, chunk=chunk)
-        self._manifest()[name] = {"codec": "ndarray", **info}
-        self._write_meta()
+        with self._edit() as fields:
+            old = fields.get(name)
+            if old is not None and not old.get("append"):
+                raise ValueError(f"{name!r} was written with write(); append() needs a field created by append()")
+            fields[name] = {"codec": "ndarray", **append_array(self._dir, name, values, dims=dims, chunk=chunk)}
+
+    def delete_field(self, name: str) -> None:
+        """Remove field `name` (inside `build`, or on a workspace record); also `del record.name`."""
+        with self._edit() as fields:
+            info = fields.pop(name, None)
+            if info is None:
+                raise KeyError(f"{self!r} has no field {name!r}")
+            get_codec(info["codec"]).delete(self._dir, name, info)
 
     def to_xarray(self, name: str) -> Any:
         """An array field as an `xarray.DataArray` with its stored dimension names (loaded)."""

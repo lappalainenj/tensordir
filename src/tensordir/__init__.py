@@ -2,7 +2,7 @@
 
 from ._canonical import Digest
 from ._diff import SpecDiff, diff
-from ._root import get_root, set_root, use_root
+from ._root import get_root, root, set_root, use_root
 from ._where import where
 from .codecs import Codec, register_codec
 from .collection import Collection
@@ -63,6 +63,7 @@ __all__ = [
     "register_codec",
     "register_dims",
     "reindex",
+    "root",
     "set_root",
     "use_root",
     "where",

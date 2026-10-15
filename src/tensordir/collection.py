@@ -16,7 +16,6 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
-from ._root import get_root
 from ._where import conditions as _conditions
 from ._where import display as _display
 from ._where import matches as _match
@@ -76,7 +75,7 @@ def _matches(spec: dict, conds: dict[str, Any]) -> bool:
 
 
 def query(cls, *, root: str | os.PathLike | None = None, status: str | Sequence[str] | None = "done", **filters: Any) -> "Collection":
-    base = get_root(root)
+    base = cls.resolve_root(root)
     wanted = {status} if isinstance(status, str) else (set(status) if status is not None else None)
     conds = _conditions(None, filters)
     found = []

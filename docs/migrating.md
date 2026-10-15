@@ -28,7 +28,8 @@ build; to change a result, change its spec or inputs.
 | | `Namespace(a=1, model=Namespace(lr=0.1))` | nested `Spec` classes, `spec.replace(model__lr=0.1)` |
 | | config fields that do not change the result (device) | `td.field("cpu", hashed=False)` |
 | | adding a config field without orphaning results | `td.field(default, since=2)` |
-| | `@root(path)` class decorator, `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
+| | `@root(path)` class decorator | `@td.root(path)` or the class attribute `root = path` |
+| | `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
 | | building from another directory's contents | inputs: `Cluster.get(spec, points=points_record, weights=array)` |
 | **Open & read** | `Directory(path)` | `td.Record.at(path)` (returns the registered class) |
 | | `dir.config.x`, `dir.config.to_dict()` | `record.spec.x`, `record.spec.to_dict()`, `record.spec.flat()` |
@@ -82,6 +83,7 @@ fit.config.n_columns, fit.centres[:]
 
 ```python
 # tensordir
+@td.root(results / "fits")
 class Fit(td.Record):
     __record_name__ = "Fit"
 
@@ -95,7 +97,7 @@ class Fit(td.Record):
     def build(self, spec, points):
         self.centres = fit(points, spec.n_columns, spec.seed)
 
-fit = Fit.get({"n_columns": 8}, points=load_points(), root=results)  # path from the key
+fit = Fit.get({"n_columns": 8}, points=load_points())  # path from the key, under results/fits
 fit.spec.n_columns, fit.centres
 ```
 
@@ -223,6 +225,5 @@ Train.query(status="failed").delete()    # or Train.get(spec, retry_failed=True)
 | `Namespace` (mutable attribute dict), `namespacify`, `without`, `walk`, `is_subset` | specs are frozen, typed dataclasses | `Spec`, `spec.replace(...)`, `spec.flat()`, `td.diff` |
 | HDF5 writing, SWMR | locking problems on shared filesystems | zarr v3; `tensordir.legacy` reads old HDF5 |
 | Equality of directory contents (`assert_equal_directories`, `Directory.__eq__`) | records compare by type, key and path | compare fields explicitly, or keys |
-| Per-class default roots (`@root`) | one root holds the index and leases | `root=`, `use_root`, `set_root` |
 | `delete_if_exists`, `y_n` prompts | implicit deletion during construction is easy to trigger by accident | `record.delete()` / `collection.delete()` explicitly |
 | `datamate` import aliases | a different object model; aliases would mislead | this page |

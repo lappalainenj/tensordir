@@ -29,6 +29,23 @@ control the key:
 
 Golden keys in the test suite pin the format. A change that alters them orphans stored records.
 
+## Roots
+
+A record type's root is resolved when a record is located or queried; the first match wins:
+
+1. the `root=` argument of `get`, `locate`, `lookup` or `query`,
+2. the innermost `with td.use_root(path)` block,
+3. the class's `root` attribute, set directly or with `@td.root(path)` (inherited by subclasses),
+4. `td.set_root(path)`,
+5. `$TENSORDIR_ROOT`.
+
+`Record.resolve_root()` returns the result. Class roots let record types live apart, as flyvis
+keeps renderings and trained networks in separate trees. Every root carries its own
+`.tensordir/` with leases, temporary builds and index, so `Fit.query()` and
+`td.reindex(Fit)` work on `Fit`'s root. A `use_root` block redirects every record type,
+including those with a class root; tests use it to keep everything in a temporary directory.
+The root never enters the key: the same record can be copied between roots.
+
 ## Layout and lifecycle
 
 ```

@@ -37,11 +37,14 @@ def _scan(type_dir: Path) -> Iterator[tuple[Path, dict]]:
                 yield path, meta
 
 
-def reindex(root: str | os.PathLike | None = None) -> Path:
-    """Rebuild the index of all records under `root` (needs pandas and pyarrow)."""
+def reindex(root: str | os.PathLike | type | None = None) -> Path:
+    """Rebuild the index of all records under `root` (needs pandas and pyarrow).
+
+    `root` may be a record class: its root (`Record.resolve_root()`) is reindexed.
+    """
     import pandas as pd
 
-    root = get_root(root)
+    root = root.resolve_root() if isinstance(root, type) else get_root(root)
     rows = []
     for type_dir in _type_dirs(root):
         mtime = type_dir.stat().st_mtime_ns

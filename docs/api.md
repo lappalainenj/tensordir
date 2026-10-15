@@ -32,6 +32,8 @@
 
 ::: tensordir.use_root
 
+::: tensordir.root
+
 ::: tensordir.get_root
 
 ::: tensordir.Dims
