@@ -61,3 +61,6 @@ dev = [
     "hypothesis>=6.169.3",
     "pytest>=9.1.1",
 ]
+torch = [
+    "torch>=2.4",
+]
