@@ -87,6 +87,7 @@ class Flaky(td.Record):
 
 
 def test_failure_is_recorded_and_retried_on_request(root):
+    Flaky.calls, Flaky.fail = 0, True
     with pytest.raises(td.BuildFailed, match="ValueError: bad input") as info:
         Flaky.get()
     assert isinstance(info.value.__cause__, ValueError)

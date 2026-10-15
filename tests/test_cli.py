@@ -2,19 +2,25 @@ import time
 
 import pytest
 
+import tensordir as td
 from tensordir import _lease
 from tensordir._lease import Lease
 from tensordir.cli import main
 from _records import Square
-from test_record import Flaky
+
+
+class Broken(td.Record):
+    __record_name__ = "Broken"
+
+    def build(self, spec):
+        raise RuntimeError("no")
 
 
 def test_ls_status_reindex(root, capsys):
     Square.get({"n": 2})
     Square.get({"n": 3})
-    Flaky.fail = True
-    with pytest.raises(Exception):
-        Flaky.get()
+    with pytest.raises(td.BuildFailed):
+        Broken.get()
     assert main(["ls"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 3 and sum("failed" in line for line in lines) == 1
@@ -22,7 +28,7 @@ def test_ls_status_reindex(root, capsys):
     assert len(capsys.readouterr().out.splitlines()) == 2
     main(["status"])
     out = capsys.readouterr().out
-    assert "Square" in out and "done" in out and "Flaky" in out
+    assert "Square" in out and "done" in out and "Broken" in out
     main(["--root", str(root), "reindex"])
     assert capsys.readouterr().out.strip().endswith("index.parquet")
 

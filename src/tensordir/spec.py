@@ -165,7 +165,7 @@ def _revive(tp: Any, value: Any) -> Any:
         if len(args) == 2 and args[1] is Ellipsis:
             return tuple(_revive(args[0], v) for v in value)
         if args and len(args) == len(value):
-            return tuple(_revive(a, v) for a, v in zip(args, value))
+            return tuple(_revive(a, v) for a, v in zip(args, value, strict=True))
         return tuple(value)
     if origin in (frozenset, set) and isinstance(value, list):
         (arg,) = typing.get_args(tp) or (None,)

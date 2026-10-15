@@ -387,7 +387,7 @@ class Record:
     def _check_sizes(self) -> None:
         sizes: dict[str, tuple[int, str]] = {}
         for name, info in self._manifest().items():
-            for dim, size in zip(info.get("dims") or (), info.get("shape") or ()):
+            for dim, size in zip(info.get("dims") or (), info.get("shape") or (), strict=bool(info.get("dims"))):
                 if dim in sizes and sizes[dim][0] != size:
                     other_size, other = sizes[dim]
                     raise DimsError(f"dimension {dim!r} has size {other_size} in {other!r} but {size} in {name!r}")
