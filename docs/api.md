@@ -12,6 +12,12 @@
 
 ::: tensordir.Collection
 
+::: tensordir.where
+
+::: tensordir.diff
+
+::: tensordir.SpecDiff
+
 ::: tensordir.View
 
 ::: tensordir.cached_method

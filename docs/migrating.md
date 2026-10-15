@@ -1,0 +1,228 @@
+# Migrating from datamate, flyvis and another project
+
+## Names
+
+datamate had one class, `Directory`, that was at once a configuration, a build recipe, a
+mutable folder and a reader. tensordir splits those roles:
+
+| datamate | tensordir | role |
+|---|---|---|
+| `Directory` subclass with `__init__(self, ...)` | `Record` subclass with `build(self, spec, **inputs)` | a recipe and its result |
+| `config` (`Namespace`), `_meta.yaml` | `Spec` (frozen dataclass), `_record.json` | what identifies a result |
+| `Directory(config)` / `Directory(path, config)` | `Record.get(spec)` / `Record.at(path, spec)` | build or reopen |
+| list of directories, `info(Type)` | `Collection` from `Record.query(...)` | many results |
+| `NetworkView`, `CheckpointedNetwork` (flyvis) | `View` | derived objects and caches |
+| `Namespace.diff` | `tensordir.diff`, `Spec.diff` | compare configurations |
+| `.custom.where` (flyvis), `where_dataframe` | `tensordir.where` | filter tables, xarray and records |
+
+Paths are content-addressed: `<root>/<RecordName>/<key[:16]>/`. A record is read-only after its
+build; to change a result, change its spec or inputs.
+
+## Use-case map
+
+| Task | datamate / flyvis / another project / joblib | tensordir |
+|---|---|---|
+| **Configure & build** | `class Fit(Directory): def __init__(self, n=8, seed=0)` | `class Fit(td.Record)` with `class Spec(td.Spec)` and `def build(self, spec)` |
+| | `Fit(n=8)`, `Fit({"n": 8})`, `Fit(Namespace(n=8))` | `Fit.get(Fit.Spec(n=8))`, `Fit.get({"n": 8})` |
+| | `Directory("runs/000", config)` (hand-named, flyvis `NetworkDir`) | `Fit.at("runs/000", spec)` |
+| | `Namespace(a=1, model=Namespace(lr=0.1))` | nested `Spec` classes, `spec.replace(model__lr=0.1)` |
+| | config fields that do not change the result (device) | `td.field("cpu", hashed=False)` |
+| | adding a config field without orphaning results | `td.field(default, since=2)` |
+| | `@root(path)` class decorator, `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
+| | building from another directory's contents | inputs: `Cluster.get(spec, points=points_record, weights=array)` |
+| **Open & read** | `Directory(path)` | `td.Record.at(path)` (returns the registered class) |
+| | `dir.config.x`, `dir.config.to_dict()` | `record.spec.x`, `record.spec.to_dict()`, `record.spec.flat()` |
+| | `dir.meta`, `dir.status` | `record.meta`, `record.status`, `record.error` |
+| | `dir.x[:]`, `dir.x[()]`, `dir["x"]` (HDF5 `ArrayFile`) | `record.x` (numpy for typed fields), `record["x"][:]` (lazy zarr), `record.load("x")` |
+| | `"x" in dir`, `dir.keys()`, `dir.tree()`, `repr(dir)` | `"x" in record`, `record.keys()`, `record.tree()`, notebook repr |
+| | sub-directories (`connectome.nodes.type[:]`) | one DataFrame (`parquet`) or `xarray.Dataset`/`DataTree` field |
+| | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `build`; `record.nodes` is the DataFrame |
+| **Labeled arrays** | shapes in docstrings, `xarray` built by hand | jaxtyping annotations store dims; `record.to_xarray("x")`, `xr.open_zarr(record.path / "data.zarr")` |
+| **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `build`; `in_place = True` to let readers watch |
+| | checkpoints `chkpts/chkpt_00010` + `extend("chkpt_index", ...)` | `self[f"chkpt_{i:05d}"] = model` + `self.append("chkpt_step", [i])` |
+| **Query many runs** | `collect_all_of_type(T)`, `dir_walk`, `EnsembleDir` children | `T.query(status=None)` |
+| | filtering a list of directories by config | `T.query(model__lr=0.1, seed=[0, 1])`, `collection.where(...)` |
+| | `generic_responses` over an ensemble (flyvis) | `collection.map(fn, dim="network", coords=["seed"], memory=...)` |
+| **Tables & where** | `info(T, depth=1, include=[...])` (another project) | `T.query(status=None).table(depth=1, include=[...])` |
+| | `namespaces_to_df(configs)` | `collection.table()` (`spec.<dotted name>` columns) |
+| | `df.query("model_config.optimizer == 'x'")` | `td.where(table, model_config__optimizer="x")` or `table.pipe(td.where, ...)` |
+| | `where_dataframe(df, type="T4a", u=2)` | `td.where(df, type="T4a", u=2)` (rows; `.index` for the index) |
+| | `responses.custom.where(cell_type=["T4a", "T4b"], time=">0,<1")` | `responses.pipe(td.where, cell_type=["T4a", "T4b"], time=">0,<1")` |
+| **Diff specs** | `config0.diff(config1, name1=, name2=)` | `td.diff(a, b)`, `a.spec.diff(b.spec)`, `hashed=True` for key-relevant fields |
+| | `check_namespaces_match(configs, ignore_keys=["id"])` | `collection.table(varying_only=True)` lists what varies |
+| **Cache function results** | `Memory(location, backend="xarray_dataset_h5")` | `td.memory(location)` (zarr/parquet; old `output.h5` still read) |
+| | `@memory.cache(ignore=["batch_size"])` | unchanged: it is a `joblib.Memory` |
+| | `func.check_call_in_cache(*args)` | `td.needs_compute(func, *args)` (the negation) |
+| **Per-record caches** | `Memory(location=dir.path / "__cache__")` in `NetworkView` | `record.memory`, `view.memory` |
+| | `CheckpointedNetwork.__reduce__` for identity hashing | records and views pickle as `(type, key, path)` |
+| | `FIFOCache` / `lru_cache` on view methods | `@td.cached_method(maxsize=...)` |
+| **Status & concurrency** | `running` / `done` / `stopped`, killed jobs stay `running` | `absent`, `running`, `done`, `failed` (traceback stored), `stale` (lease expired) |
+| | `_override_status(str(e))`, `set_run_failed` (another project) | automatic: an exception in `build` stores a `failed` record |
+| | `locked_meta` with `fcntl` (another project), SWMR HDF5 | `mkdir` leases with heartbeats; atomic rename of finished builds |
+| | rerun a failure | `Fit.get(spec, retry_failed=True)` |
+| | job status of an ensemble (flyvis `ensemble.status()`) | `collection.status_counts()`, `tensordir status` |
+| **Delete & clean** | `dir.rmtree("y")`, `delete_if_exists=True` | `record.delete()`, then `get` rebuilds |
+| | `rm_all_of_type(T)`, `clean_root_dir()` | `T.query(status=None).delete()`, `tensordir gc` |
+| **Legacy directories** | existing datamate trees with `_meta.yaml` and `.h5` | `tensordir.legacy.open_datamate(path)` (read-only) |
+
+## Before and after
+
+### Configure and build
+
+```python
+# datamate
+@root(results / "fits")
+class Fit(Directory):
+    def __init__(self, n_columns: int = 8, seed: int = 0, device: str = "cpu"):
+        self.centres = fit(load_points(), n_columns, seed)
+
+fit = Fit(n_columns=8)                 # scans _meta.yaml files to find an existing match
+fit.config.n_columns, fit.centres[:]
+```
+
+```python
+# tensordir
+class Fit(td.Record):
+    __record_name__ = "Fit"
+
+    class Spec(td.Spec):
+        n_columns: int = 8
+        seed: int = 0
+        device: str = td.field("cpu", hashed=False)
+
+    centres: Float[np.ndarray, "n_columns n_dims"]
+
+    def build(self, spec, points):
+        self.centres = fit(points, spec.n_columns, spec.seed)
+
+fit = Fit.get({"n_columns": 8}, points=load_points(), root=results)  # path from the key
+fit.spec.n_columns, fit.centres
+```
+
+### Append logs during training
+
+```python
+# datamate (flyvis Solver)
+self.dir.extend("loss", [loss])
+self.dir.extend("chkpt_index", [self._last_chkpt_ind])
+```
+
+```python
+# tensordir
+class Train(td.Record):
+    in_place = True  # readers see rows while the build runs
+
+    def build(self, spec):
+        for step in range(spec.n_steps):
+            ...
+            self.append("loss", [loss])
+            if step % spec.checkpoint_every == 0:
+                self[f"chkpt_{step:05d}"] = model
+                self.append("chkpt_step", [step])
+```
+
+### Query, tables and where
+
+```python
+# another project
+runs = info(FitDir, depth=1, include=["model_type"])
+runs = runs.query("model_config.optimizer == 'adam'")
+```
+
+```python
+# tensordir
+runs = Fit.query(model_config__optimizer="adam")      # filter on disk
+table = Fit.query(status=None).table(depth=1, include=["model_type"])
+table.pipe(td.where, status="done", model_config__lr=">1e-4, <1e-2")   # filter a table
+table.groupby("spec.model_type")["duration_s"].mean()                  # flat columns group
+Fit.query().table(varying_only=True)                              # only what differs
+```
+
+Conditions are the same for `Record.query`, `Collection.where` and `tensordir.where`: a value
+(equality, floats to a relative 1e-9), a list (any of), comparison strings (`">0.1, <=1"`), a
+compiled regex, or a callable. Nested names use `__` or a mapping with dotted keys.
+
+```python
+# flyvis
+responses.custom.where(cell_type=["T4a", "T4b"], intensity=1, time="<1.0,>0")
+```
+
+```python
+# tensordir
+responses.pipe(td.where, cell_type=["T4a", "T4b"], intensity=1, time="<1.0,>0")
+```
+
+### Diff specs
+
+```python
+# flyvis Ensemble
+diff = config0.diff(self[i].dir.config, name1="first", name2="second").first
+```
+
+```python
+# tensordir
+d = td.diff(first, second)       # specs, records, views or dicts
+if d:
+    print(d)                     # SpecDiff(  ~ network.lr: 0.1 -> 0.01 ...)
+d.changed, d.added, d.removed    # dotted names
+td.diff(first, second, hashed=True)   # only fields that change the key
+```
+
+### Cache function results per record
+
+```python
+# flyvis NetworkView
+self.memory = Memory(location=self.dir.path / "__cache__", backend="xarray_dataset_h5", verbose=0)
+fn = self.memory.cache(compute_responses, ignore=["batch_size"])
+if fn.check_call_in_cache(self._network, ...):
+    ...
+```
+
+```python
+# tensordir
+class NetworkView(td.View):
+    def responses(self, stimuli, batch_size=4):
+        return self.memory.cache(compute_responses, ignore=["batch_size"])(self, stimuli, batch_size)
+
+view = NetworkView(Network.get(spec))
+td.needs_compute(view.memory.cache(compute_responses, ignore=["batch_size"]), view, stimuli, 4)
+```
+
+A complete version, with checkpoints and an ensemble `map`, is in
+[Extending](extending.md#views-that-rebuild-domain-objects).
+
+### Status, reruns and cleanup
+
+```python
+# another project
+try:
+    train(model_dir)
+except Exception as e:
+    model_dir._override_status(str(e))
+rm_all_of_type(FitDir, y_n="y")
+```
+
+```python
+# tensordir
+try:
+    run = Train.get(spec)                # failures are stored with their traceback
+except td.BuildFailed as e:
+    print(e)
+Train.query(status=None).status_counts() # {"done": 48, "failed": 2}
+Train.query(status="failed").delete()    # or Train.get(spec, retry_failed=True)
+```
+
+## Not carried over
+
+| datamate feature | Why not | Instead |
+|---|---|---|
+| Mutating a directory after it is built (`dir.x = ...`, `extend`, `update`, `__delitem__`, `_modified_past_init`) | a result must match its key; edits would silently invalidate it | write everything in `build`; `in_place = True` for progressive writes |
+| Directory search by config (`_meta.yaml` scan, `Directory(config)` lookup) | slow on large roots and ambiguous | content-addressed keys; `Record.query` and the index for search |
+| `move` | the path is a function of the key | `Record.at` for hand-named directories |
+| Nested `Directory` trees | one record per result keeps keys and status simple | DataFrame, `xarray.Dataset`/`DataTree` fields, or separate records linked as inputs |
+| `Namespace` (mutable attribute dict), `namespacify`, `without`, `walk`, `is_subset` | specs are frozen, typed dataclasses | `Spec`, `spec.replace(...)`, `spec.flat()`, `td.diff` |
+| HDF5 writing, SWMR | locking problems on shared filesystems | zarr v3; `tensordir.legacy` reads old HDF5 |
+| Equality of directory contents (`assert_equal_directories`, `Directory.__eq__`) | records compare by type, key and path | compare fields explicitly, or keys |
+| Per-class default roots (`@root`) | one root holds the index and leases | `root=`, `use_root`, `set_root` |
+| `delete_if_exists`, `y_n` prompts | implicit deletion during construction is easy to trigger by accident | `record.delete()` / `collection.delete()` explicitly |
+| `datamate` import aliases | a different object model; aliases would mislead | this page |

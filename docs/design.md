@@ -122,10 +122,15 @@ Typed fields use jaxtyping annotations. Their shape strings become zarr `dimensi
 
 ## Collections and views
 
-- `Record.query(**filters)` filters on the flattened spec (`model__lr=0.1`, or a predicate) and on
-  status.
-- `Collection.table()` gives one row per record. `Collection.map(fn, dim=, coords=)`
-  concatenates per-record xarray results, optionally memoized.
+- `Record.query(**filters)` filters on the flattened spec (`model__lr=0.1`, `seed=[0, 1]`,
+  `lr=">1e-3"`, a regex or a predicate) and on status. Stored specs are revived through the
+  class's current `Spec`, so fields added later with `since=` show their default for old records.
+- `tensordir.where` applies the same conditions to `Collection`s, DataFrames (columns, with
+  `spec.` implied) and xarray objects (coordinates). It generalises flyvis's `.custom.where`.
+- `Collection.table()` gives one row per record; `varying_only=True` keeps the spec columns that
+  differ. `tensordir.diff` compares two specs, records or dicts by dotted name.
+- `Collection.map(fn, dim=, coords=)` concatenates per-record xarray results, optionally
+  memoized.
 - `tensordir.reindex()` writes `.tensordir/index.parquet`. Queries trust a type directory's rows
   while its mtime is unchanged, because records enter and leave by rename, which updates that
   mtime.
