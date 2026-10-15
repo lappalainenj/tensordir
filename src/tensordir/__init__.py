@@ -17,18 +17,35 @@ from .errors import (
     RootNotSet,
     TensordirError,
 )
+from .external import DeltaRef, ParquetRef, SnapshotChanged
 from .index import reindex
 from ._owner import record, transient
 from ._record import Record
 from .spec import Spec, field
 from .view import View, cached_method
+from . import accessors
+
+accessors.register()  # `.td` on pandas and xarray objects; TENSORDIR_NO_ACCESSORS=1 skips it
 
 
 def memory(location, *, lazy: bool = True, **kwargs):
-    """A `joblib.Memory` storing xarray results as zarr and DataFrames as parquet (needs joblib)."""
+    """A `joblib.Memory` whose results are stored by the codec registry (needs joblib).
+
+    xarray results become zarr, DataFrames parquet, tensor dicts safetensors, and values of any
+    registered codec use that codec; the rest is pickled by joblib. `backend=` takes a
+    `StoreBackend` subclass; other keyword arguments go to `joblib.Memory`.
+    """
     from ._memory import memory as _memory
 
     return _memory(location, lazy=lazy, **kwargs)
+
+
+def __getattr__(name: str):
+    if name == "StoreBackend":  # imported on demand: joblib is optional
+        from ._memory import StoreBackend
+
+        return StoreBackend
+    raise AttributeError(f"module 'tensordir' has no attribute {name!r}")
 
 
 def needs_compute(func, *args, **kwargs) -> bool:
@@ -41,16 +58,20 @@ __all__ = [
     "CanonicalizationError",
     "Codec",
     "Collection",
+    "DeltaRef",
     "Digest",
     "Dims",
     "DimsError",
     "KeyCollision",
+    "ParquetRef",
     "ReadOnlyError",
     "Record",
     "RecordBusy",
     "RootNotSet",
+    "SnapshotChanged",
     "Spec",
     "SpecDiff",
+    "StoreBackend",
     "TensordirError",
     "View",
     "cached_method",

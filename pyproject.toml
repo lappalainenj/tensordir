@@ -45,7 +45,14 @@ legacy = [
 torch = [
     "safetensors>=0.4",
 ]
-all = ["tensordir[xarray,memory,tables,typing,legacy,torch]"]
+delta = [
+    "deltalake>=0.18",
+    "pyarrow>=15",
+]
+hdf5 = [
+    "h5py>=3.10",
+]
+all = ["tensordir[xarray,memory,tables,typing,legacy,torch,delta,hdf5]"]
 
 [project.scripts]
 tensordir = "tensordir.cli:main"
@@ -61,6 +68,7 @@ addopts = "-ra"
 
 [dependency-groups]
 dev = [
+    "duckdb>=1.1",
     "hypothesis>=6.169.3",
     "imageio>=2.38.1",
     "pillow>=12.3.0",

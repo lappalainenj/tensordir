@@ -46,6 +46,10 @@ def display(value: Any) -> Any:
             return f"digest:{value['__digest__'][:16]}"
         if "__record__" in value:
             return f"{value['__record__']}:{value['key'][:16]}"
+        if "__delta__" in value:
+            return f"delta:{value['__delta__']}@{value['version']}"
+        if "__parquet__" in value:
+            return f"parquet:{value['__parquet__']}@{str(value['version'])[:16]}"
         return json.dumps(value)
     if isinstance(value, (list, tuple)):
         return json.dumps(list(value))
@@ -184,11 +188,16 @@ def _close_names(name: str, names: list[str]) -> str:
 def _frame_where(frame: Any, conds: dict[str, Any]) -> Any:
     keep = np.ones(len(frame), dtype=bool)
     columns = [str(c) for c in frame.columns]
+    levels = [str(n) for n in frame.index.names if n is not None]
     for name, condition in conds.items():
         column = name if name in frame.columns else f"spec.{name}"
-        if column not in frame.columns:
-            raise KeyError(f"no column {name!r}{_close_names(name, columns)}")
-        keep &= mask(frame[column].to_numpy(dtype=object), condition)
+        if column in frame.columns:
+            values = frame[column].to_numpy(dtype=object)
+        elif name in levels:
+            values = frame.index.get_level_values(name).to_numpy(dtype=object)
+        else:
+            raise KeyError(f"no column {name!r}{_close_names(name, columns + levels)}")
+        keep &= mask(values, condition)
     return frame[keep]
 
 

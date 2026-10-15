@@ -206,6 +206,9 @@ def _revive(tp: Any, value: Any) -> Any:
                 continue
         return value
     if isinstance(tp, type):
+        revive = getattr(tp, "__tensordir_revive__", None)
+        if revive is not None and isinstance(value, dict):
+            return revive(value)
         if issubclass(tp, Spec) and isinstance(value, dict):
             return tp.from_dict(value)
         if issubclass(tp, PurePath) and isinstance(value, str):

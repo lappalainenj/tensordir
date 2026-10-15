@@ -14,7 +14,7 @@ mutable folder and a reader. tensordir splits those roles:
 | list of directories, `info(Type)` | `Collection` from `Record.query(...)` | many results |
 | `NetworkView`, `CheckpointedNetwork` (flyvis) | `View` | derived objects and caches |
 | `Namespace.diff` | `tensordir.diff`, `Spec.diff` | compare configurations |
-| `.custom.where` (flyvis), `where_dataframe` | `tensordir.where` | filter tables, xarray and records |
+| `.custom.where` (flyvis), `where_dataframe` | `tensordir.where`, `.td.where` accessors | filter tables, xarray and records |
 
 Paths are content-addressed: `<root>/<RecordName>/<key[:16]>/`. A record is read-only after its
 build unless its class is a workspace record (`mutable = True`); to change a result, change its
@@ -33,6 +33,7 @@ spec or inputs.
 | | `@root(path)` class decorator | `@td.root(path)` or the class attribute `root = path` |
 | | `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
 | | building from another directory's contents | inputs: `Cluster.get(spec, points=points_record, weights=array)` |
+| | reading a Delta export (another project `export.to_table()`), caching by release version | a `td.DeltaRef(uri, version=...)` spec field; `ref.to_table(columns=, filter=)`, `ref.duckdb()`, `ref.materialize(self, name)` |
 | **Open & read** | `Directory(path)` | `td.Record.at(path)` (returns the registered class) |
 | | `dir.config.x`, `dir.config.to_dict()` | `record.spec.x`, `record.spec.to_dict()`, `record.spec.flat()` |
 | | `dir.meta`, `dir.status` | `record.meta`, `record.status`, `record.error` |
@@ -50,9 +51,9 @@ spec or inputs.
 | | `generic_responses` over an ensemble (flyvis) | `collection.map(fn, dim="network", coords=["seed"], memory=...)` |
 | **Tables & where** | `info(T, depth=1, include=[...])` (another project) | `T.query(status=None).table(depth=1, include=[...])` |
 | | `namespaces_to_df(configs)` | `collection.table()` (`spec.<dotted name>` columns) |
-| | `df.query("model_config.optimizer == 'x'")` | `td.where(table, model_config__optimizer="x")` or `table.pipe(td.where, ...)` |
-| | `where_dataframe(df, type="T4a", u=2)` | `td.where(df, type="T4a", u=2)` (rows; `.index` for the index) |
-| | `responses.custom.where(cell_type=["T4a", "T4b"], time=">0,<1")` | `responses.pipe(td.where, cell_type=["T4a", "T4b"], time=">0,<1")` |
+| | `df.query("model_config.optimizer == 'x'")` | `table.td.where(model_config__optimizer="x")` or `td.where(table, ...)` |
+| | `where_dataframe(df, type="T4a", u=2)` | `df.td.where(type="T4a", u=2)` (rows; `.index` for the index) |
+| | `responses.custom.where(cell_type=["T4a", "T4b"], time=">0,<1")` | `responses.td.where(cell_type=["T4a", "T4b"], time=">0,<1")` |
 | **Diff specs** | `config0.diff(config1, name1=, name2=)` | `td.diff(a, b)`, `a.spec.diff(b.spec)`, `hashed=True` for key-relevant fields |
 | | `check_namespaces_match(configs, ignore_keys=["id"])` | `collection.table(varying_only=True)` lists what varies |
 | **Cache function results** | `Memory(location, backend="xarray_dataset_h5")` | `td.memory(location)` (zarr/parquet; old `output.h5` still read) |
@@ -174,7 +175,7 @@ runs = runs.query("model_config.optimizer == 'adam'")
 # tensordir
 runs = Fit.query(model_config__optimizer="adam")      # filter on disk
 table = Fit.query(status=None).table(depth=1, include=["model_type"])
-table.pipe(td.where, status="done", model_config__lr=">1e-4, <1e-2")   # filter a table
+table.td.where(status="done", model_config__lr=">1e-4, <1e-2")        # filter a table
 table.groupby("spec.model_type")["duration_s"].mean()                  # flat columns group
 Fit.query().table(varying_only=True)                              # only what differs
 ```
@@ -190,7 +191,7 @@ responses.custom.where(cell_type=["T4a", "T4b"], intensity=1, time="<1.0,>0")
 
 ```python
 # tensordir
-responses.pipe(td.where, cell_type=["T4a", "T4b"], intensity=1, time="<1.0,>0")
+responses.td.where(cell_type=["T4a", "T4b"], intensity=1, time="<1.0,>0")
 ```
 
 ### Diff specs
@@ -207,6 +208,7 @@ if d:
     print(d)                     # SpecDiff(  ~ network.lr: 0.1 -> 0.01 ...)
 d.changed, d.added, d.removed    # dotted names
 td.diff(first, second, hashed=True)   # only fields that change the key
+table.td.diff(0, 1)                   # two rows of Collection.table(), on their spec columns
 ```
 
 ### Cache function results per record

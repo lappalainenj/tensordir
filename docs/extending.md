@@ -11,6 +11,7 @@ packages (named in the `# requires:` line) are missing.
 | build a record from other records or arrays | keyword inputs to `Record.get` and `build` |
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
 | let an existing class fill a record over time | `@td.record`, or a `mutable = True` record |
+| depend on a Delta table or parquet directory outside the root | `td.DeltaRef`, `td.ParquetRef` |
 | change how joblib stores cached results | a subclass of the tensordir store backend |
 
 ## Codecs
@@ -603,6 +604,70 @@ assert list(Run.get({"lr": 0.1}).load("losses")) == [1.0, 0.5]
 del solver.record.losses
 assert "losses" not in solver.record
 ```
+
+## Records built from external tables
+
+A `DeltaRef` pins a Delta Lake table version, a `ParquetRef` a parquet directory listing; as a
+spec field either one keys the record by the exact snapshot (see
+[Design](design.md#external-tables)). This script writes a small local Delta table as a stand-in
+for a CAVE synapse export on GCS.
+
+```python
+# requires: deltalake pyarrow pandas
+import numpy as np
+import pyarrow as pa
+from deltalake import write_deltalake
+
+import tensordir as td
+
+td.set_root("results")
+
+
+def synapses(n, seed):
+    rng = np.random.default_rng(seed)
+    return pa.table({
+        "pre_pt_root_id": rng.integers(0, 20, n),
+        "post_pt_root_id": rng.integers(0, 20, n),
+        "size": rng.integers(10, 500, n),
+    })
+
+
+write_deltalake("synapses", synapses(2000, 0))  # e.g. gs://.../synapses_pni_2/post_pt_root_id
+
+
+class Edges(td.Record):
+    __record_name__ = "Edges"
+
+    class Spec(td.Spec):
+        synapses: td.DeltaRef
+        min_size: int = 0
+
+    def build(self, spec):
+        table = spec.synapses.to_table(  # only these columns and rows are read
+            columns=["pre_pt_root_id", "post_pt_root_id", "size"], filter={"size": f">={spec.min_size}"}
+        )
+        self["edges"] = table.group_by(["pre_pt_root_id", "post_pt_root_id"]).aggregate(
+            [("size", "count"), ("size", "sum")]
+        )
+        spec.synapses.materialize(self, "large", filter={"size": ">=400"})  # a local parquet copy
+
+
+snapshot = td.DeltaRef("synapses")  # pins the current version (0); or version=0 explicitly
+edges = Edges.get({"synapses": snapshot, "min_size": 50})
+assert edges.spec.synapses.version == 0
+assert edges.load("edges").column_names == ["pre_pt_root_id", "post_pt_root_id", "size_count", "size_sum"]
+assert edges["large"].count_rows() == snapshot.to_table(filter={"size": ">=400"}).num_rows  # lazy dataset
+
+write_deltalake("synapses", synapses(500, 1), mode="append")  # the export moves on: version 1
+assert Edges.lookup({"synapses": td.DeltaRef("synapses"), "min_size": 50}) is None  # new snapshot, new key
+assert Edges.get({"synapses": snapshot, "min_size": 50}) == edges  # the pinned snapshot reopens
+print(Edges.query().table(sizes=False)[["key", "spec.synapses", "spec.min_size"]])
+```
+
+On GCS, pass credentials for reading only:
+`td.DeltaRef("gs://bucket/path", version=3, storage_options={"google_service_account_path": ...})`.
+They stay out of keys and `_record.json`. For a directory of parquet files, use
+`td.ParquetRef(path)`; its version is a digest of the file listing.
 
 ## joblib store backend
 

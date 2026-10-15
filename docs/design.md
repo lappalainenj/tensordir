@@ -176,13 +176,43 @@ Tests cover six processes racing for one record (exactly one build), SIGKILL dur
 | `numpy.ndarray` | `ndarray` | zarr v3 array in `data.zarr/<name>` with `dimension_names` |
 | `xarray.DataArray`/`Dataset`/`DataTree` | `xarray` | zarr group `data.zarr/<name>` |
 | `pandas.DataFrame` | `parquet` | `<name>.parquet` |
+| `pyarrow.Table`, `RecordBatchReader` | `arrow` | `<name>.parquet`, streamed batch by batch |
 | JSON scalars, lists, str-keyed dicts | `json` | `<name>.json` |
 | `torch.nn.Module`, `{str: Tensor}` | `safetensors` | `<name>.safetensors` (state dict) |
 | anything | `pickle` | `<name>.pkl`, only with `write(name, value, codec="pickle")` |
 
-`record["x"]` returns a lazy handle: a `zarr.Array`, or an xarray object opened without loading.
-`record.x` returns the declared type: an ndarray for jaxtyping numpy fields. `record.load("x")`
-always loads. `register_codec` adds codecs, and later registrations are tried first.
+`record["x"]` returns a lazy handle: a `zarr.Array`, an xarray object opened without loading, or
+a `pyarrow.dataset.Dataset` for `arrow` fields. `record.x` returns the declared type: an ndarray
+for jaxtyping numpy fields. `record.load("x")` always loads. `register_codec` adds codecs, and
+later registrations are tried first.
+
+## External tables
+
+Some inputs live outside any root and are too large to copy: another project reads CAVE synapse
+exports, Delta Lake tables on GCS, through `deltalake` and duckdb. `td.DeltaRef` and
+`td.ParquetRef` name one snapshot of such a table so that records can depend on it:
+
+| | `DeltaRef(uri, version=None, storage_options=None)` | `ParquetRef(uri, version=None)` |
+|---|---|---|
+| table | a Delta Lake table (local, `gs://`, `s3://`, ...) | a directory of parquet files, flat or hive-partitioned |
+| version | the Delta version; `None` pins the current one when the reference is created | sha256 of the sorted `(path, size)` listing; `None` computes it |
+| canonical form | `{"__delta__": uri, "version": n}` | `{"__parquet__": uri, "version": digest}` |
+| drift | Delta keeps old versions until they are vacuumed | reading re-lists the files and raises `SnapshotChanged` on a mismatch |
+
+- A reference can be a spec field (typed `td.DeltaRef`) or a `get` input. Its identity is the URI
+  and version, so a new table version gives new keys, and old records stay valid for the old
+  snapshot. Local paths become absolute URIs.
+- `storage_options` (credentials) and the parquet `filesystem` are not identity: they never enter
+  keys, `_record.json` or reprs. A reference revived from a stored spec has none; pass them again
+  with `dataclasses.replace(ref, storage_options=...)`, or rely on ambient credentials.
+- Reads are lazy: `dataset()` gives a `pyarrow.dataset.Dataset`; `to_table`, `to_pandas`,
+  `to_batches`, `to_reader` and `scanner` take `columns=` and `filter=`, and `duckdb()` and
+  `to_polars()` hand the dataset to those engines, which push down their own projections and
+  filters. `filter` is a pyarrow expression or a mapping in the pushdown-able part of the
+  `where` grammar: a value, `None` (null), a list (any of), or comparisons like `">=2, <8"`.
+- `ref.materialize(record, name, columns=, filter=)` streams a selection into a record as an
+  `arrow` field. Use it when a build needs a stable local copy, or when the source may be
+  vacuumed.
 
 ## Dimension names
 
@@ -217,7 +247,17 @@ Typed fields use jaxtyping annotations. Their shape strings become zarr `dimensi
   `lr=">1e-3"`, a regex or a predicate) and on status. Stored specs are revived through the
   class's current `Spec`, so fields added later with `since=` show their default for old records.
 - `tensordir.where` applies the same conditions to `Collection`s, DataFrames (columns, with
-  `spec.` implied) and xarray objects (coordinates). It generalises flyvis's `.custom.where`.
+  `spec.` implied, then index levels) and xarray objects (coordinates). It generalises flyvis's
+  `.custom.where`.
+- **Accessors.** `import tensordir` imports pandas and xarray when they are installed and
+  registers a `.td` accessor on `DataFrame`, `Series`, `DataArray` and `Dataset`:
+  `table.td.where(...)` and `responses.td.where(...)` call `tensordir.where`;
+  `series.td.where("<0.1", cell_type="T4a")` filters a Series by value and by index level;
+  `table.td.diff(a, b)` and `row.td.diff(other)` diff two table rows on their `spec.` columns.
+  xarray accessors have no `diff`: coordinates are not specs. This side effect costs about
+  0.4 s of import time (pandas and xarray). If another package has already registered `.td`,
+  tensordir warns and keeps the other accessor; `TENSORDIR_NO_ACCESSORS=1` skips registration
+  and the imports.
 - `Collection.table()` gives one row per record; `varying_only=True` keeps the spec columns that
   differ. `tensordir.diff` compares two specs, records or dicts by dotted name.
 - `Collection.map(fn, dim=, coords=)` concatenates per-record xarray results, optionally

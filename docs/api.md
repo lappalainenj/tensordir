@@ -8,6 +8,16 @@
 
 ::: tensordir.Digest
 
+::: tensordir.DeltaRef
+
+::: tensordir.ParquetRef
+
+::: tensordir.external.TableRef
+
+::: tensordir.external.expression
+
+::: tensordir.SnapshotChanged
+
 ::: tensordir.Record
 
 ::: tensordir.record
@@ -17,6 +27,8 @@
 ::: tensordir.Collection
 
 ::: tensordir.where
+
+::: tensordir.accessors
 
 ::: tensordir.diff
 

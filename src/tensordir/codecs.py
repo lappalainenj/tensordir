@@ -5,6 +5,7 @@
 | `numpy.ndarray` | `ndarray` | zarr v3 array in `data.zarr/<name>` (with `dimension_names`) |
 | `xarray.DataArray` / `Dataset` / `DataTree` | `xarray` | zarr group `data.zarr/<name>` |
 | `pandas.DataFrame` | `parquet` | `<name>.parquet` |
+| `pyarrow.Table` / `RecordBatchReader` | `arrow` | `<name>.parquet` (streamed) |
 | JSON scalars, lists, str-keyed dicts | `json` | `<name>.json` |
 | `torch.nn.Module` or `{str: torch.Tensor}` | `safetensors` | `<name>.safetensors` (state dict) |
 | anything | `pickle` | `<name>.pkl`, only when asked for with `codec="pickle"` |
@@ -65,6 +66,11 @@ class Codec:
 
     def accepts(self, value: Any) -> bool:
         return False
+
+    def faithful(self, value: Any) -> bool:
+        """Whether `read` returns `value` as it was (same type, equal content). The joblib store
+        backend only uses codecs that are faithful for the result at hand."""
+        return True
 
     def write(self, directory: Path, name: str, value: Any, *, dims: Sequence[str] | None = None) -> dict:
         raise NotImplementedError
@@ -211,6 +217,46 @@ class ParquetCodec(FileCodec):
         return pd.read_parquet(self.path(directory, name))
 
 
+class ArrowCodec(FileCodec):
+    """`pyarrow.Table` and `RecordBatchReader` (streamed) as parquet. `record[name]` opens a lazy
+    `pyarrow.dataset.Dataset`; loading gives a `pyarrow.Table`."""
+
+    name = "arrow"
+    suffix = ".parquet"
+
+    def accepts(self, value: Any) -> bool:
+        pa = sys.modules.get("pyarrow")
+        return pa is not None and isinstance(value, (pa.Table, pa.RecordBatchReader))
+
+    def faithful(self, value: Any) -> bool:
+        return False  # lazy reads return a dataset, and a reader cannot be replayed
+
+    def write(self, directory, name, value, *, dims=None):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        with atomic_path(self.path(directory, name)) as tmp:
+            if isinstance(value, pa.Table):
+                pq.write_table(value, tmp)
+                rows = value.num_rows
+            else:
+                rows = 0
+                with pq.ParquetWriter(tmp, value.schema) as writer:
+                    for batch in value:
+                        writer.write_batch(batch)
+                        rows += batch.num_rows
+        return {"rows": rows}
+
+    def read(self, directory, name, info, *, lazy=True):
+        if lazy:
+            import pyarrow.dataset as ds
+
+            return ds.dataset(self.path(directory, name), format="parquet")
+        import pyarrow.parquet as pq
+
+        return pq.read_table(self.path(directory, name), memory_map=True)
+
+
 def _jsonable(value: Any) -> bool:
     if value is None or isinstance(value, (bool, int, float, str, np.bool_, np.integer, np.floating)):
         return True
@@ -258,6 +304,9 @@ class SafetensorsCodec(FileCodec):
         if isinstance(value, torch.nn.Module):
             return True
         return isinstance(value, Mapping) and bool(value) and all(isinstance(v, torch.Tensor) for v in value.values())
+
+    def faithful(self, value: Any) -> bool:
+        return isinstance(value, Mapping)  # a module comes back as its state dict
 
     def write(self, directory, name, value, *, dims=None):
         import torch
@@ -321,7 +370,7 @@ def codec_for(value: Any) -> Codec:
     )
 
 
-for _codec in (PickleCodec(), SafetensorsCodec(), JsonCodec(), ParquetCodec(), XarrayCodec(), NdarrayCodec()):
+for _codec in (PickleCodec(), SafetensorsCodec(), JsonCodec(), ParquetCodec(), ArrowCodec(), XarrayCodec(), NdarrayCodec()):
     register_codec(_codec)
 
 
