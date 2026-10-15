@@ -1,9 +1,11 @@
-"""joblib.Memory with a store backend for labeled results.
+"""joblib.Memory with a store backend that writes results through tensordir's codec registry.
 
-xarray results are stored as `output.zarr` (written to a temporary directory, then renamed),
-DataFrames as `output.parquet`, everything else through joblib's own pickle path (numpy arrays
-natively). Loads are lazy by default. `output.h5` caches written by the flyvis and another project
-netCDF backends stay readable.
+A result whose type a registered codec claims (xarray as zarr, DataFrames and arrow tables as
+parquet, `{str: Tensor}` as safetensors, and any codec you register: images, models, ...) is
+written by that codec into `output.td/`, which appears by rename. numpy arrays, plain Python
+values and everything else take joblib's pickle path. Loads are lazy where the codec supports it.
+`output.zarr` and `output.parquet` from earlier tensordir versions and `output.h5` from the
+flyvis and another project netCDF backends stay readable.
 
 Adapted from flyvis (`flyvis/utils/xarray_joblib_backend.py`, MIT, Copyright (c) 2023 Janne K.
 Lappalainen, Fabian D. Tschopp, Mason McGill, Jakob H. Macke, Srinivas C. Turaga) and its
@@ -13,63 +15,30 @@ joblib exposes store backends only through the private `joblib._store_backends` 
 supported joblib range is pinned in `pyproject.toml` and checked by contract tests.
 """
 
+import json
 import os
 import shutil
-import sys
 import uuid
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from joblib import Memory, register_store_backend
 from joblib._store_backends import CacheWarning, FileSystemStoreBackend
 
-from .codecs import atomic_path
+from .codecs import Codec, codec_for, get_codec, remove_tree
 
-__all__ = ["memory", "TensordirStoreBackend", "BACKEND"]
+__all__ = ["memory", "StoreBackend", "BACKEND"]
 
 BACKEND = "tensordir"
-ZARR, PARQUET, H5, PICKLE = "output.zarr", "output.parquet", "output.h5", "output.pkl"
+OUTPUT, PICKLE = "output.td", "output.pkl"
+ZARR, PARQUET, H5 = "output.zarr", "output.parquet", "output.h5"  # read only (earlier formats)
+_CODEC_FILE = "codec.json"
+_FIELD = "output"
 _KIND = "__tensordir_kind__"
 _NAME = "__tensordir_dataarray__"
 _UNNAMED = "__xarray_dataarray_variable__"
 _LEGACY_NAME_FLAGS = ("__microns_columns_dataarray_name__",)
-
-
-def _kind(item: Any) -> str | None:
-    xr, pd = sys.modules.get("xarray"), sys.modules.get("pandas")
-    if xr is not None and isinstance(item, (xr.Dataset, xr.DataArray, xr.DataTree)):
-        return ZARR
-    if pd is not None and isinstance(item, pd.DataFrame):
-        return PARQUET
-    return None
-
-
-def _write_zarr(item: Any, dest: Path) -> None:
-    import xarray as xr
-
-    tmp = dest.with_name(f".{dest.name}.tmp-{uuid.uuid4().hex}")
-    try:
-        if isinstance(item, xr.DataTree):
-            tree = item.copy()
-            tree.attrs = {**item.attrs, _KIND: "datatree"}
-            tree.to_zarr(tmp, mode="w", zarr_format=3, consolidated=False)
-        else:
-            if isinstance(item, xr.DataArray):
-                variable = item.name if item.name is not None else _UNNAMED
-                dataset = item.to_dataset(name=variable)
-                dataset.attrs = {_KIND: "dataarray", _NAME: "" if item.name is None else variable}
-            else:
-                dataset = item.copy(deep=False)
-                dataset.attrs = {**item.attrs, _KIND: "dataset"}
-            dataset.drop_encoding().to_zarr(tmp, mode="w", zarr_format=3, consolidated=False)
-        if dest.exists():
-            grave = dest.with_name(f".{dest.name}.old-{uuid.uuid4().hex}")
-            os.rename(dest, grave)
-            shutil.rmtree(grave, ignore_errors=True)
-        os.rename(tmp, dest)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _read_zarr(path: Path, lazy: bool) -> Any:
@@ -104,12 +73,32 @@ def _read_h5(path: Path) -> Any:
     return dataset
 
 
-class TensordirStoreBackend(FileSystemStoreBackend):
-    """A joblib `FileSystemStoreBackend` that stores xarray as zarr and DataFrames as parquet.
+def _remove(path: Path) -> None:
+    if path.is_dir():
+        remove_tree(path)
+    else:
+        path.unlink(missing_ok=True)
 
-    Backend option `lazy` (default True) opens zarr outputs without loading them.
+
+class StoreBackend(FileSystemStoreBackend):
+    """A joblib store backend that stores results with tensordir codecs.
+
+    For each result, `select_codec` picks a registered codec or `None` (joblib's pickle path).
+    The default picks `codec_for(item)` unless its name is in `skip_codecs` or the codec says
+    it would not restore the value faithfully (`Codec.faithful`). Subclass to change either, then
+    pass the class to `tensordir.memory(location, backend=MyBackend)`:
+
+    ```python
+    class ZarrArrays(td.StoreBackend):
+        skip_codecs = frozenset({"json", "pickle"})  # numpy results as zarr, not joblib pickles
+    ```
+
+    Backend option `lazy` (default True) opens results lazily where the codec can.
     """
 
+    #: Codecs never used for cached results: joblib already stores numpy arrays (with memory
+    #: mapping) and plain Python values natively, and `pickle` is opt-in.
+    skip_codecs: ClassVar[frozenset[str]] = frozenset({"ndarray", "json", "pickle"})
     lazy = True
 
     def configure(self, location, verbose=1, backend_options=None):
@@ -117,27 +106,49 @@ class TensordirStoreBackend(FileSystemStoreBackend):
         self.lazy = options.pop("lazy", True)
         super().configure(location, verbose=verbose, backend_options=options)
 
-    def dump_item(self, call_id, item, verbose=1):
-        kind = _kind(item)
-        item_path = Path(self.location, *call_id)
-        for other in (ZARR, PARQUET, H5, PICKLE):
-            if other != (kind or PICKLE) and (item_path / other).exists():
-                target = item_path / other
-                shutil.rmtree(target) if target.is_dir() else target.unlink()
-        if kind is None:
-            return super().dump_item(call_id, item, verbose=verbose)
+    def select_codec(self, item: Any) -> Codec | None:
+        """The codec storing `item`, or None to let joblib pickle it."""
         try:
-            self.create_location(str(item_path))
-            if kind == ZARR:
-                _write_zarr(item, item_path / ZARR)
-            else:
-                with atomic_path(item_path / PARQUET) as tmp:
-                    item.to_parquet(tmp)
+            codec = codec_for(item)
+        except TypeError:
+            return None
+        if codec.name in self.skip_codecs or not codec.faithful(item):
+            return None
+        return codec
+
+    def dump_item(self, call_id, item, verbose=1):
+        item_path = Path(self.location, *call_id)
+        codec = self.select_codec(item)
+        keep = OUTPUT if codec is not None else PICKLE
+        for other in (OUTPUT, PICKLE, ZARR, PARQUET, H5):
+            if other != keep and (item_path / other).exists():
+                _remove(item_path / other)
+        if codec is None:
+            return super().dump_item(call_id, item, verbose=verbose)
+        self.create_location(str(item_path))
+        tmp = item_path / f".{OUTPUT}.tmp-{uuid.uuid4().hex}"
+        try:
+            tmp.mkdir()
+            info = codec.write(tmp, _FIELD, item, dims=None)
+            (tmp / _CODEC_FILE).write_text(json.dumps({"codec": codec.name, "info": info}))
+            target = item_path / OUTPUT
+            if target.exists():
+                _remove(target)
+            try:
+                os.rename(tmp, target)
+            except OSError:
+                if not target.exists():  # otherwise a concurrent call stored the same result first
+                    raise
         except Exception as exc:
             warnings.warn(f"Unable to cache {type(item).__name__} to disk: {exc}", CacheWarning, stacklevel=2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def load_item(self, call_id, verbose=1, timestamp=None, metadata=None):
         item_path = Path(self.location, *call_id)
+        if (item_path / OUTPUT).is_dir():
+            stored = json.loads((item_path / OUTPUT / _CODEC_FILE).read_text())
+            return get_codec(stored["codec"]).read(item_path / OUTPUT, _FIELD, stored["info"], lazy=self.lazy)
         if (item_path / ZARR).exists():
             return _read_zarr(item_path / ZARR, self.lazy)
         if (item_path / PARQUET).exists():
@@ -150,16 +161,22 @@ class TensordirStoreBackend(FileSystemStoreBackend):
 
     def contains_item(self, call_id):
         item_path = os.path.join(self.location, *call_id)
-        return any(self._item_exists(os.path.join(item_path, name)) for name in (ZARR, PARQUET, H5, PICKLE))
+        return any(self._item_exists(os.path.join(item_path, name)) for name in (OUTPUT, PICKLE, ZARR, PARQUET, H5))
 
 
-register_store_backend(BACKEND, TensordirStoreBackend)
+register_store_backend(BACKEND, StoreBackend)
 
 
-def memory(location: str | os.PathLike, *, lazy: bool = True, **kwargs: Any) -> Memory:
-    """A `joblib.Memory` at `location` using the tensordir store backend.
+def memory(
+    location: str | os.PathLike, *, lazy: bool = True, backend: type[StoreBackend] = StoreBackend, **kwargs: Any
+) -> Memory:
+    """A `joblib.Memory` at `location` using `backend` (a `StoreBackend` subclass).
 
-    `lazy=False` loads zarr outputs into memory. Other keyword arguments go to `joblib.Memory`.
+    `lazy=False` loads results into memory. Other keyword arguments go to `joblib.Memory`.
     """
+    if not (isinstance(backend, type) and issubclass(backend, StoreBackend)):
+        raise TypeError(f"backend must be a tensordir.StoreBackend subclass, got {backend!r}")
+    name = BACKEND if backend is StoreBackend else f"{BACKEND}:{backend.__module__}.{backend.__qualname__}"
+    register_store_backend(name, backend)
     options = {"lazy": lazy, **kwargs.pop("backend_options", {})}
-    return Memory(location=str(location), backend=BACKEND, backend_options=options, **kwargs)
+    return Memory(location=str(location), backend=name, backend_options=options, **kwargs)

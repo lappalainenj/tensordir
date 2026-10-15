@@ -12,7 +12,7 @@ packages (named in the `# requires:` line) are missing.
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
 | let an existing class fill a record over time | `@td.record`, or a `mutable = True` record |
 | depend on a Delta table or parquet directory outside the root | `td.DeltaRef`, `td.ParquetRef` |
-| change how joblib stores cached results | a subclass of the tensordir store backend |
+| change how joblib stores cached results | a registered `Codec`, or a `td.StoreBackend` subclass |
 
 ## Codecs
 
@@ -672,54 +672,37 @@ They stay out of keys and `_record.json`. For a directory of parquet files, use
 ## joblib store backend
 
 `td.memory(location)` (and `record.memory`, `view.memory`) returns a `joblib.Memory` whose store
-backend writes xarray results as zarr and DataFrames as parquet, and leaves everything else to
-joblib. joblib hashes arguments by pickling them; records and views pickle as `(type, key, path)`.
-Give your own wrapper types the same identity hashing with `__reduce__`, as flyvis's
-`CheckpointedNetwork` does.
+backend, `td.StoreBackend`, writes each result with the codec registered for its type, the same
+registry records use: xarray as zarr, DataFrames as parquet, `{str: Tensor}` as safetensors, and
+whatever you register. numpy arrays, plain Python values and anything without a faithful codec
+go through joblib's pickle path. joblib hashes arguments by pickling them; records and views
+pickle as `(type, key, path)`. Give your own wrapper types the same identity hashing with
+`__reduce__`, as flyvis's `CheckpointedNetwork` does.
 
-To store another type natively, subclass the backend and register it with joblib. joblib exposes
-store backends only through private modules; tensordir pins `joblib>=1.4,<1.6` and tests the
-signatures it relies on, but a subclass of your own inherits that dependency.
+There are two ways to store another type natively:
+
+- **Register a codec.** Records and caches both pick it up. The backend uses a codec only if
+  `codec.faithful(value)` is true, i.e. reading returns an equal value of the same type; the
+  built-in `safetensors` codec is not faithful for modules (it returns their state dict), so a
+  cached module is pickled unless a codec like `ModuleCodec` above claims it.
+- **Subclass `td.StoreBackend`** and override `select_codec(item)` (return a codec or `None`) or
+  `skip_codecs` (codec names never used, by default `ndarray`, `json` and `pickle`). Pass the
+  class as `td.memory(location, backend=...)`; tensordir registers it with joblib.
+
+Results stored by a codec live in `output.td/` next to joblib's `metadata.json`, written to a
+temporary directory and renamed. Caches written by earlier tensordir versions (`output.zarr`,
+`output.parquet`) and by the flyvis and another project netCDF backends (`output.h5`) still load.
 
 ```python
 # requires: joblib torch safetensors
 from pathlib import Path
 
-import joblib
+import numpy as np
 import torch
-from safetensors.torch import load_file, save_file
+import zarr
 
-from tensordir._memory import TensordirStoreBackend
-
-OUTPUT = "output.safetensors"
-
-
-def _is_state(item):
-    return isinstance(item, dict) and bool(item) and all(isinstance(v, torch.Tensor) for v in item.values())
-
-
-class TorchStoreBackend(TensordirStoreBackend):
-    """Dicts of tensors as safetensors; xarray, DataFrames and pickles as in tensordir."""
-
-    def dump_item(self, call_id, item, verbose=1):
-        if not _is_state(item):
-            return super().dump_item(call_id, item, verbose=verbose)
-        path = Path(self.location, *call_id)
-        self.create_location(str(path))
-        save_file({k: v.detach().cpu().contiguous() for k, v in item.items()}, str(path / OUTPUT))
-
-    def load_item(self, call_id, verbose=1, timestamp=None, metadata=None):
-        path = Path(self.location, *call_id, OUTPUT)
-        if path.exists():
-            return load_file(str(path))
-        return super().load_item(call_id, verbose=verbose, timestamp=timestamp, metadata=metadata)
-
-    def contains_item(self, call_id):
-        return Path(self.location, *call_id, OUTPUT).exists() or super().contains_item(call_id)
-
-
-joblib.register_store_backend("tensordir_torch", TorchStoreBackend)
-memory = joblib.Memory("cache", backend="tensordir_torch", verbose=0)
+import tensordir as td
+from tensordir.codecs import get_codec
 
 
 class Checkpoint:
@@ -732,6 +715,16 @@ class Checkpoint:
         return Checkpoint, (self.path, self.step)
 
 
+class LargeArraysAsZarr(td.StoreBackend):
+    """Arrays above 1 MB as zarr, reopened lazily as `zarr.Array`; the rest as usual."""
+
+    def select_codec(self, item):
+        if isinstance(item, np.ndarray) and item.nbytes > 2**20:
+            return get_codec("ndarray")
+        return super().select_codec(item)
+
+
+memory = td.memory("cache", backend=LargeArraysAsZarr, verbose=0)
 calls = []
 
 
@@ -742,8 +735,17 @@ def init_weights(checkpoint: Checkpoint, n_units: int):
     return {"weight": torch.randn(n_units, n_units), "bias": torch.zeros(n_units)}
 
 
+@memory.cache
+def activity(n_frames: int):
+    return np.random.default_rng(0).normal(size=(n_frames, 1000))
+
+
 a = init_weights(Checkpoint("runs/a", 3), 4)
-b = init_weights(Checkpoint("runs/a", 3), 4)  # loaded from cache/.../output.safetensors
+b = init_weights(Checkpoint("runs/a", 3), 4)  # the built-in safetensors codec stored it
 assert calls == [3] and torch.equal(a["weight"], b["weight"])
-assert next(Path("cache").rglob(OUTPUT))
+assert next(Path("cache").rglob("output.td/output.safetensors"))
+
+activity(500)
+assert isinstance(activity(500), zarr.Array)  # 4 MB: zarr, opened lazily
+assert isinstance(activity(5), np.ndarray)  # small: joblib's own format
 ```

@@ -40,6 +40,10 @@
 
 ::: tensordir.memory
 
+::: tensordir._memory.StoreBackend
+    options:
+      show_root_full_path: false
+
 ::: tensordir.needs_compute
 
 ::: tensordir.reindex

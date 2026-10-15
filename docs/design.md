@@ -230,16 +230,27 @@ Typed fields use jaxtyping annotations. Their shape strings become zarr `dimensi
 
 ## joblib
 
-`tensordir.memory(location)` returns a `joblib.Memory` with a store backend for labeled results:
+`tensordir.memory(location)` returns a `joblib.Memory` whose store backend, `td.StoreBackend`,
+uses the codec registry:
 
-- xarray results go to `output.zarr`: written to a temporary directory, then renamed, and opened
-  lazily on load.
-- DataFrames go to parquet; everything else takes joblib's pickle path.
-- `output.h5` caches written by the flyvis and another project netCDF backends are still read.
+- A result is written by `codec_for(result)` into `output.td/` (a temporary directory, then
+  renamed), with `codec.json` naming the codec, and read back lazily where the codec supports it.
+  xarray goes to zarr, DataFrames to parquet, `{str: Tensor}` to safetensors, and values of a
+  registered codec (images, models) use that codec.
+- numpy arrays and plain Python values keep joblib's pickle path (`skip_codecs`: `ndarray`,
+  `json`, `pickle`), which keeps memory mapping and exact Python types. So does anything whose
+  codec is not faithful for it (`Codec.faithful`): torch modules under the built-in safetensors
+  codec, arrow tables.
+- `output.zarr` and `output.parquet` from earlier tensordir versions, and `output.h5` from the
+  flyvis and another project netCDF backends, are still read; recomputing replaces them.
+- Subclasses override `select_codec(item)` or `skip_codecs` and are passed as
+  `td.memory(location, backend=Subclass)`, which registers them with joblib.
 - Records pickle as `(type id, key, path)`, so joblib hashes a record's identity, not its data.
   Specs pickle in canonical form.
 - The backend subclasses joblib's private `FileSystemStoreBackend`. joblib is pinned to
   `>=1.4,<1.6`, and contract tests check the private signatures the backend relies on.
+  Subclasses of `td.StoreBackend` that only override `select_codec` or `skip_codecs` do not
+  touch joblib internals.
 
 ## Collections and views
 
