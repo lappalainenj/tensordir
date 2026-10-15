@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: "If you use tensordir, please cite it using these metadata."
+title: tensordir
+abstract: >-
+  Content-addressed records of labeled tensors in directories: a record is built once from a typed
+  spec, stored as zarr, parquet and JSON with provenance, and reopened by key from any process.
+type: software
+license: MIT
+version: 0.1.0
+authors:
+  - family-names: Lappalainen
+    given-names: Janne K.
+    # orcid: TODO (add "https://orcid.org/XXXX-XXXX-XXXX-XXXX")
+keywords:
+  - zarr
+  - xarray
+  - caching
+  - provenance
+  - reproducibility
+references:
+  - type: software
+    title: datamate
+    url: "https://github.com/flyvis/datamate"
+    authors:
+      - family-names: Lappalainen
+        given-names: Janne K.
+    notes: Predecessor of tensordir; its git history is preserved in this repository.
+  - type: software
+    title: artisan
+    url: "https://github.com/MasonMcGill/artisan"
+    authors:
+      - family-names: McGill
+        given-names: Mason
+    notes: Predecessor of datamate.
