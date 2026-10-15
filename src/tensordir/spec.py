@@ -111,7 +111,63 @@ class Spec:
         return sha256(self.hashed_dict())
 
     def replace(self, **changes: Any) -> Self:
-        return dataclasses.replace(self, **changes)
+        """A copy with `changes`; nested fields by dotted or `__` names.
+
+        ```python
+        spec.replace(seed=1, model__lr=0.01)        # same as
+        spec.replace(**{"seed": 1, "model.lr": 0.01})
+        ```
+        """
+        direct: dict[str, Any] = {}
+        nested: dict[str, dict[str, Any]] = {}
+        for name, value in changes.items():
+            head, dot, rest = name.replace("__", ".").partition(".")
+            if dot:
+                nested.setdefault(head, {})[rest] = value
+            else:
+                direct[head] = value
+        for head, sub in nested.items():
+            base = direct.get(head, getattr(self, head))
+            if not isinstance(base, Spec):
+                raise TypeError(f"{type(self).__qualname__}.{head} is not a nested spec; cannot set {sorted(sub)}")
+            direct[head] = base.replace(**sub)
+        return dataclasses.replace(self, **direct)
+
+    def flat(self) -> dict[str, Any]:
+        """All fields by dotted name (`{"model.lr": 0.1, ...}`), in canonical JSON form."""
+        from .collection import flatten
+
+        return flatten(self.to_dict())
+
+    def diff(self, other: Any, *, hashed: bool = False) -> Any:
+        """`tensordir.diff(self, other)`: added, removed and changed fields by dotted name."""
+        from ._diff import diff
+
+        return diff(self, other, hashed=hashed)
+
+    def _rows(self, prefix: str = "") -> list[tuple[str, Any, str]]:
+        rows = []
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            opts = _options(f)
+            if isinstance(value, Spec):
+                rows.extend(value._rows(f"{prefix}{f.name}."))
+                continue
+            note = "not hashed" if not opts.hashed else (f"since {opts.since}" if opts.since is not None else "")
+            rows.append((f"{prefix}{f.name}", value, note))
+        return rows
+
+    def _repr_html_(self) -> str:
+        import html
+
+        body = "".join(
+            f"<tr><td><code>{html.escape(name)}</code></td><td>{html.escape(repr(value))}</td><td>{note}</td></tr>"
+            for name, value, note in self._rows()
+        )
+        return (
+            f"<p><b>{html.escape(type(self).__qualname__)}</b></p>"
+            f"<table><tbody>{body}</tbody></table>"
+        )
 
     @classmethod
     def from_dict(cls, data: dict) -> Self:

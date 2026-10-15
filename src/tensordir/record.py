@@ -265,8 +265,9 @@ class Record:
     def query(cls, *, root: str | os.PathLike | None = None, status: str | None = "done", **filters: Any):
         """A `Collection` of this type's records whose flattened spec matches `filters`.
 
-        Filter names use `__` for nesting (`model__lr=0.1`); values are compared in canonical
-        form, or called if callable. `status=None` includes records of any status.
+        Filter names use `__` for nesting (`model__lr=0.1`). Values follow `tensordir.where`:
+        equality, any of a list (`seed=[0, 1]`), comparisons (`lr=">1e-3, <0.1"`), a compiled
+        regex, or a callable. `status=None` includes records of any status.
         """
         from .collection import query
 
@@ -607,6 +608,73 @@ class Record:
         except Exception:
             status = "?"
         return f"<{type(self).__qualname__} {key} {status}>"
+
+    def _field_rows(self) -> list[tuple[str, str, str]]:
+        rows = []
+        for name, info in sorted(self._manifest().items()):
+            parts = []
+            if info.get("dtype"):
+                parts.append(np.dtype(info["dtype"]).name)
+            if info.get("shape") is not None:
+                parts.append(str(tuple(info["shape"])))
+            if info.get("dims"):
+                parts.append("[" + ", ".join(info["dims"]) + "]")
+            if info.get("kind"):
+                parts.append(info["kind"])
+            if info.get("append"):
+                parts.append("appendable")
+            rows.append((name, info["codec"], " ".join(parts)))
+        return rows
+
+    def tree(self) -> None:
+        """Print the record's type, key, status, path and stored fields with their shapes and dims."""
+        rows = self._field_rows()
+        if (self._path / "__cache__").is_dir():
+            rows.append(("__cache__/", "joblib", ""))
+        width = max((len(name) for name, _, _ in rows), default=0)
+        lines = [f"{self!r} {self._path}"]
+        for i, (name, codec, details) in enumerate(rows):
+            branch = "└──" if i == len(rows) - 1 else "├──"
+            lines.append(f"{branch} {name:<{width}}  {codec:<11} {details}".rstrip())
+        print("\n".join(lines))
+
+    def _repr_html_(self) -> str:
+        import html
+
+        from ._where import display
+        from .collection import flatten, spec_dict
+
+        try:
+            status = self.status
+            meta = self._disk_meta()
+        except Exception as exc:
+            return f"<p>{html.escape(repr(self))}: {html.escape(str(exc))}</p>"
+        out = [
+            f"<p><b>{html.escape(type(self).__qualname__)}</b> <code>{(self.key or '?')[:16]}</code> "
+            f"<i>{status}</i> <small>{html.escape(str(self._path))}</small></p>"
+        ]
+        if meta is None:
+            return out[0]
+        if meta.get("error"):
+            error = meta["error"]
+            out.append(f"<pre>{html.escape(error.get('type', ''))}: {html.escape(error.get('message', ''))}</pre>")
+        spec = flatten(spec_dict(type(self), meta.get("spec", {})))
+        if spec:
+            out.append("<table><thead><tr><th>spec</th><th></th></tr></thead><tbody>")
+            out.extend(
+                f"<tr><td><code>{html.escape(k)}</code></td><td>{html.escape(repr(display(v)))}</td></tr>"
+                for k, v in spec.items()
+            )
+            out.append("</tbody></table>")
+        fields = self._field_rows()
+        if fields:
+            out.append("<table><thead><tr><th>field</th><th>codec</th><th></th></tr></thead><tbody>")
+            out.extend(
+                f"<tr><td><code>{html.escape(n)}</code></td><td>{c}</td><td>{html.escape(d)}</td></tr>"
+                for n, c, d in fields
+            )
+            out.append("</tbody></table>")
+        return "".join(out)
 
 
 def _check_type(name: str, annotation: Any, value: Any) -> None:

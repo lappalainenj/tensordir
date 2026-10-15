@@ -1,7 +1,9 @@
 """tensordir: content-addressed records of labeled tensors in directories."""
 
 from ._canonical import Digest
+from ._diff import SpecDiff, diff
 from ._root import get_root, set_root, use_root
+from ._where import where
 from .codecs import Codec, register_codec
 from .collection import Collection
 from .dims import Dims, dim_name, dims_for, register_dims
@@ -47,9 +49,11 @@ __all__ = [
     "RecordBusy",
     "RootNotSet",
     "Spec",
+    "SpecDiff",
     "TensordirError",
     "View",
     "cached_method",
+    "diff",
     "dim_name",
     "dims_for",
     "field",
@@ -61,4 +65,5 @@ __all__ = [
     "reindex",
     "set_root",
     "use_root",
+    "where",
 ]

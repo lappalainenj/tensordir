@@ -46,6 +46,11 @@ class View:
     def __repr__(self) -> str:
         return f"{type(self).__qualname__}({self.record!r})"
 
+    def _repr_html_(self) -> str:
+        import html
+
+        return f"<p><b>{html.escape(type(self).__qualname__)}</b> of</p>" + self.record._repr_html_()
+
 
 def cached_method(func: Callable | None = None, /, *, maxsize: int | None = 128) -> Any:
     """Cache a method per instance, keyed by the canonical form of its bound arguments.

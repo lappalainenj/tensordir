@@ -1,4 +1,5 @@
 import pickle
+import re
 
 import joblib
 import numpy as np
@@ -55,6 +56,68 @@ def test_query_filters(sweep):
     assert len(Sweep.query(missing=1)) == 0
     assert len(Sweep.query().where(lambda r: r.spec.seed == 2)) == 1
     assert len(Sweep.query().where(tag="base")) == 4
+
+
+def test_query_and_where_share_the_condition_grammar(sweep):
+    assert sorted(r.spec.seed for r in Sweep.query(seed=[1, 2])) == [1, 2]
+    assert [r.spec.model.lr for r in Sweep.query(model__lr=">0.2")] == [0.5]
+    runs = Sweep.query()
+    assert len(runs.where({"model.lr": 0.5})) == 1
+    assert len(runs.where(lambda r: r.spec.seed == 0, model__lr=0.1)) == 1
+    assert len(td.where(runs, seed=">=1")) == 2
+    assert len(runs.where(tag=re.compile("^ba"))) == 4
+    table = runs.table(sizes=False)
+    assert sorted(td.where(table, seed=[1, 2])["key"]) == sorted(r.key[:16] for r in runs.where(seed=[1, 2]))
+
+
+def test_queries_see_defaults_of_fields_added_later(root):
+    class Grown(td.Record):
+        __record_name__ = "Grown"
+
+        class Spec(td.Spec):
+            n: int
+
+        def build(self, spec):
+            self["n"] = spec.n
+
+    old = Grown.get({"n": 1})
+
+    class Grown(td.Record):  # the same record type after adding a field
+        __record_name__ = "Grown"
+
+        class Spec(td.Spec):
+            n: int
+            prior: float = td.field(1.0, since=2)
+
+        def build(self, spec):
+            self["n"] = spec.n
+
+    assert Grown.get({"n": 1}).key == old.key
+    assert len(Grown.query(prior=1.0)) == 1
+    assert len(Grown.query().where(prior=1.0)) == 1
+    assert Grown.query().table(sizes=False)["spec.prior"].tolist() == [1.0]
+
+
+def test_table_varying_only(sweep):
+    table = Sweep.query().table(sizes=False, varying_only=True)
+    assert [c for c in table.columns if c.startswith("spec.")] == ["spec.seed", "spec.model.lr"]
+    assert "status" in table and "key" in table
+
+
+def test_collection_repr_and_status_counts(sweep):
+    runs = Sweep.query(status=None)
+    assert runs.status_counts() == {"done": 4, "failed": 1}
+    assert repr(runs) == "Collection(5 records of Sweep: 4 done, 1 failed)"
+    assert repr(td.Collection()) == "Collection(0 records of no type)"
+    page = runs._repr_html_()
+    assert "<table" in page and "spec.seed" in page and "spec.tag" not in page and "path" not in page
+
+
+def test_collection_delete(sweep):
+    assert Sweep.query(status="failed").delete() == 1
+    assert len(Sweep.query(status=None)) == 4
+    with pytest.raises(td.BuildFailed):
+        Sweep.get({"seed": 9, "fail": True})  # rebuilt from scratch, fails again
 
 
 def test_table(sweep):
