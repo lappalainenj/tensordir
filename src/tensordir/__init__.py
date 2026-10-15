@@ -17,6 +17,19 @@ from .errors import (
 from .record import Record
 from .spec import Spec, field
 
+
+def memory(location, *, lazy: bool = True, **kwargs):
+    """A `joblib.Memory` storing xarray results as zarr and DataFrames as parquet (needs joblib)."""
+    from ._memory import memory as _memory
+
+    return _memory(location, lazy=lazy, **kwargs)
+
+
+def needs_compute(func, *args, **kwargs) -> bool:
+    """Whether calling the memoized `func` with these arguments would compute rather than load."""
+    return not func.check_call_in_cache(*args, **kwargs)
+
+
 __all__ = [
     "BuildFailed",
     "CanonicalizationError",
@@ -35,6 +48,8 @@ __all__ = [
     "dims_for",
     "field",
     "get_root",
+    "memory",
+    "needs_compute",
     "register_codec",
     "register_dims",
     "set_root",
