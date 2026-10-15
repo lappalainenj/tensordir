@@ -62,6 +62,8 @@ addopts = "-ra"
 [dependency-groups]
 dev = [
     "hypothesis>=6.169.3",
+    "imageio>=2.38.1",
+    "pillow>=12.3.0",
     "pytest>=9.1.1",
 ]
 docs = [
