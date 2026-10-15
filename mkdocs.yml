@@ -1,0 +1,30 @@
+site_name: tensordir
+site_description: Content-addressed records of labeled tensors in directories.
+repo_name: tensordir
+docs_dir: docs
+nav:
+  - Home: index.md
+  - Design: design.md
+  - API: api.md
+  - History: history.md
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: false
+            show_root_heading: true
+            members_order: source
+            docstring_style: google
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.highlight
+  - pymdownx.superfences
