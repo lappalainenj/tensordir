@@ -63,7 +63,7 @@ def collect(cls: type) -> dict:
         packages[owner] = _version(owner)
     try:
         source = inspect.getsourcefile(cls)
-    except TypeError:
+    except (TypeError, OSError):  # OSError: a class defined in a notebook or REPL (`__main__` without a file)
         source = None
     return {
         "host": socket.gethostname(),

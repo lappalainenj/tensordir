@@ -45,6 +45,23 @@ def test_layout_and_metadata(root):
     assert rec.keys() == ["summary", "values"] and "values" in rec
 
 
+def test_builds_classes_defined_in_a_notebook(root, monkeypatch):
+    import sys
+    import types
+
+    monkeypatch.setitem(sys.modules, "__main__", types.ModuleType("__main__"))  # a kernel's __main__ has no file
+
+    class Notebook(td.Record):
+        __record_name__ = "Notebook"
+        __module__ = "__main__"
+
+        def build(self, spec):
+            self.x = np.arange(3)
+
+    rec = Notebook.get()
+    assert rec.status == "done" and rec.meta["provenance"]["git"] is None
+
+
 def test_unhashed_fields_share_the_record(root):
     a = Square.get(Square.Spec(n=2, device="cpu"))
     b = Square.get(Square.Spec(n=2, device="cuda"))
