@@ -11,7 +11,7 @@ mutable folder and a reader. tensordir splits those roles:
 | a class holding `self.dir = Directory(config)` and writing to it (flyvis `Solver`) | `@td.record` class, or a `mutable = True` record held as `self.record` | an object that fills a record over time |
 | `config` (`Namespace`), `_meta.yaml` | `Spec` (frozen dataclass), `_record.json` | what identifies a result |
 | `Directory(config)` / `Directory(path, config)` | `Record.get(spec)` / `Record.at(path, spec)` | build or reopen |
-| list of directories, `info(Type)` | `Collection` from `Record.query(...)` | many results |
+| list of directories, `info(Type)` | `Collection` from `Record.query(...)`, `Record.info(...)` | many results |
 | `NetworkView`, `CheckpointedNetwork` (flyvis) | `View` | derived objects and caches |
 | `Namespace.diff` | `tensordir.diff`, `Spec.diff` | compare configurations |
 | `.custom.where` (flyvis), `where_dataframe` | `tensordir.where`, `.td.where` accessors | filter tables, xarray and records |
@@ -49,7 +49,7 @@ spec or inputs.
 | **Query many runs** | `collect_all_of_type(T)`, `dir_walk`, `EnsembleDir` children | `T.query(status=None)` |
 | | filtering a list of directories by config | `T.query(model__lr=0.1, seed=[0, 1])`, `collection.where(...)` |
 | | `generic_responses` over an ensemble (flyvis) | `collection.map(fn, dim="network", coords=["seed"], memory=...)` |
-| **Tables & where** | `info(T, depth=1, include=[...])` (another project) | `T.query(status=None).table(depth=1, include=[...])` |
+| **Tables & where** | `info(T, depth=1, include=[...])` (another project) | `T.info(depth=1, include=[...])`; `record.info()` for one record |
 | | `namespaces_to_df(configs)` | `collection.table()` (`spec.<dotted name>` columns) |
 | | `df.query("model_config.optimizer == 'x'")` | `table.td.where(model_config__optimizer="x")` or `td.where(table, ...)` |
 | | `where_dataframe(df, type="T4a", u=2)` | `df.td.where(type="T4a", u=2)` (rows; `.index` for the index) |
@@ -174,7 +174,7 @@ runs = runs.query("model_config.optimizer == 'adam'")
 ```python
 # tensordir
 runs = Fit.query(model_config__optimizer="adam")      # filter on disk
-table = Fit.query(status=None).table(depth=1, include=["model_type"])
+table = Fit.info(depth=1, include=["model_type"])                  # all statuses, as a DataFrame
 table.td.where(status="done", model_config__lr=">1e-4, <1e-2")        # filter a table
 table.groupby("spec.model_type")["duration_s"].mean()                  # flat columns group
 Fit.query().table(varying_only=True)                              # only what differs

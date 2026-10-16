@@ -18,7 +18,7 @@ Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray r
 | Build or reopen | `Record.get`, `lookup`, `locate`, `at` |
 | Store values | `self.x = ...`, `self["x"] = ...`, `write(codec=...)`, `append` |
 | Name array axes | jaxtyping field annotations, `Dims`, `register_dims` |
-| Work with many records | `Record.query`, `Collection.where`, `Collection.table`, `Collection.map`, `reindex` |
+| Work with many records | `Record.query`, `Record.info`, `Collection.where`, `Collection.table`, `Collection.map`, `reindex` |
 | Filter tables, records and xarray results | `where` |
 | Compare specs and records | `diff`, `Spec.diff`, `Collection.table(varying_only=True)` |
 | Inspect in a notebook | rich reprs of `Spec`, `Record`, `Collection`; `Record.tree()` |

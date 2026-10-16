@@ -291,7 +291,9 @@ uses the codec registry:
   tensordir warns and keeps the other accessor; `TENSORDIR_NO_ACCESSORS=1` skips registration
   and the imports.
 - `Collection.table()` gives one row per record; `varying_only=True` keeps the spec columns that
-  differ. `tensordir.diff` compares two specs, records or dicts by dotted name.
+  differ. `Fit.info(depth=, include=, **filters)` is `Fit.query(status=None, **filters).table(...)`
+  in one call (another project's `info`), and `record.info()` is a record's one-row table.
+  `tensordir.diff` compares two specs, records or dicts by dotted name.
 - `Collection.map(fn, dim=, coords=)` concatenates per-record xarray results, optionally
   memoized.
 - `tensordir.reindex()` writes `.tensordir/index.parquet`. Queries trust a type directory's rows

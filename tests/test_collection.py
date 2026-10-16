@@ -134,6 +134,24 @@ def test_table(sweep):
     assert "spec.model.lr" in Sweep.query().table(depth=1, include=["lr$"])
 
 
+def test_info_on_class_and_record(sweep):
+    pd.testing.assert_frame_equal(
+        Sweep.info(depth=1, include=["lr$"], sizes=False),
+        Sweep.query(status=None).table(depth=1, include=["lr$"], sizes=False),
+    )
+    assert len(Sweep.info(sizes=False)) == 5  # all statuses
+    failed = Sweep.info(status="failed", seed=9, sizes=False)
+    assert failed["status"].tolist() == ["failed"]
+    assert len(Sweep.info(seed=[1, 2], varying_only=True, sizes=False)) == 2
+    record = Sweep.get({"seed": 1})
+    row = record.info(depth=1, sizes=False)
+    assert len(row) == 1 and row["key"].iloc[0] == record.key[:16]
+    assert "spec.seed" in row and "spec.model.lr" not in row
+    pd.testing.assert_frame_equal(row, td.Collection([record]).table(depth=1, sizes=False))
+    with pytest.raises(TypeError):
+        record.info(seed=1)  # a record's table takes no filters
+
+
 def test_map_concatenates_with_spec_coords(sweep):
     runs = Sweep.query(model__lr=0.1)
     result = runs.map(lambda r: r.response, dim="run", coords=["seed", "model__lr"])

@@ -10,7 +10,7 @@ import traceback
 import types
 import typing
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
@@ -78,6 +78,18 @@ def _unwrap(annotation: Any) -> Any:
 def _wants_numpy(annotation: Any) -> bool:
     base = _unwrap(annotation)
     return base is np.ndarray or getattr(base, "array_type", None) is np.ndarray
+
+
+class _ClassOrInstance:
+    """A method bound to the class when looked up on the class, to the instance otherwise."""
+
+    def __init__(self, on_class: Any, on_instance: Any):
+        self._on_class, self._on_instance = on_class, on_instance
+
+    def __get__(self, obj: Any, owner: type | None = None) -> Any:
+        if obj is None:
+            return types.MethodType(self._on_class, owner)
+        return types.MethodType(self._on_instance, obj)
 
 
 class Record:
@@ -291,6 +303,36 @@ class Record:
         from .collection import query
 
         return query(cls, root=root, status=status, **filters)
+
+    def _info_of_type(
+        cls,
+        *,
+        root: str | os.PathLike | None = None,
+        status: str | None = None,
+        depth: int | None = None,
+        include: Sequence[str] = (),
+        sizes: bool = True,
+        varying_only: bool = False,
+        **filters: Any,
+    ):
+        return cls.query(root=root, status=status, **filters).table(
+            depth=depth, include=include, sizes=sizes, varying_only=varying_only
+        )
+
+    def _info_of_record(self, *, depth: int | None = None, include: Sequence[str] = (), sizes: bool = True):
+        from .collection import Collection
+
+        return Collection([self]).table(depth=depth, include=include, sizes=sizes)
+
+    info = _ClassOrInstance(_info_of_type, _info_of_record)
+    """A table of records (another project's `info(Type, depth, include)`), needs pandas.
+
+    On the class, `Fit.info(depth=..., include=..., **filters)` is
+    `Fit.query(root=root, status=status, **filters).table(depth=..., include=..., sizes=...,
+    varying_only=...)` with `status=None` (all statuses) by default. On a record,
+    `fit.info(depth=..., include=..., sizes=...)` is its one-row table.
+    """
+    del _info_of_type, _info_of_record
 
     def build(self, spec: Any, **inputs: Any) -> None:
         """The recipe. Write fields with `self.name = value`, `self["name"] = value` or `append`.
