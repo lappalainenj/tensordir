@@ -4,6 +4,19 @@ repo_name: tensordir
 docs_dir: docs
 nav:
   - Home: index.md
+  - Examples:
+      - Overview: examples/index.md
+      - Records: examples/01_records.ipynb
+      - Codecs: examples/02_codecs.ipynb
+      - Queries and tables: examples/03_queries_and_tables.ipynb
+      - Collections and views: examples/04_collections_and_views.ipynb
+      - Classes that own a record: examples/05_owner_classes.ipynb
+      - Roots: examples/06_roots.ipynb
+      - Concurrent builds: examples/07_concurrency.ipynb
+      - joblib caches: examples/08_joblib_memory.ipynb
+      - Accessors: examples/09_accessors.ipynb
+      - External tables: examples/10_external_tables.ipynb
+      - datamate directories: examples/11_legacy_datamate.ipynb
   - Migrating: migrating.md
   - Extending: extending.md
   - Design: design.md
@@ -16,6 +29,12 @@ theme:
     - navigation.sections
 plugins:
   - search
+  - mkdocs-jupyter:
+      include: ["examples/*.ipynb"]
+      execute: true  # every build runs the notebooks; a failing cell fails the build
+      allow_errors: false
+      cache: false  # the cache is keyed by notebook text only and would hide library changes
+      include_source: true
   - mkdocstrings:
       handlers:
         python:

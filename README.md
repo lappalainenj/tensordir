@@ -73,8 +73,9 @@ Status is `absent`, `running`, `done`, `failed` (traceback stored; rebuild with
 `retry_failed=True`) or `stale` (the builder stopped heartbeating). Concurrent `get` calls on any
 number of processes build once: the first takes an `mkdir` lease, the others wait.
 
-Read on: [migrating from datamate, flyvis and another project](docs/migrating.md),
-[extending](docs/extending.md), [design](docs/design.md) and [history](docs/history.md).
+Read on: [example notebooks](docs/examples/index.md) for every use case,
+[migrating from datamate, flyvis and another project](docs/migrating.md), [extending](docs/extending.md),
+[design](docs/design.md) and [history](docs/history.md).
 
 ## License
 
