@@ -1,5 +1,6 @@
 """`Record`: a content-addressed directory, built once from a spec and reopened afterwards."""
 
+import dataclasses
 import datetime
 import json
 import os
@@ -18,7 +19,7 @@ from typing import Any, ClassVar, Literal, Self
 import numpy as np
 
 from . import _provenance
-from ._canonical import canonical, sha256
+from ._canonical import canonical, sha256, untag
 from ._lease import Lease, lease_state
 from ._root import get_root
 from .codecs import atomic_path, codec_for, get_codec, remove_tree
@@ -356,12 +357,16 @@ class Record:
         cls = type(self)
         deadline = None if timeout is None else time.monotonic() + timeout
         delay = 0.01
+        checked = False
         while True:
             meta = self._disk_meta()
             if meta and meta["status"] == "done":
                 return self
             if meta and meta["status"] == "failed" and not retry_failed:
                 raise BuildFailed(self, meta.get("error") or {})
+            if not checked:
+                self._check_upstream(inputs)
+                checked = True
             lease = Lease.acquire(self._lock, ttl=cls.lease_ttl, heartbeat=cls.heartbeat_interval)
             if lease is not None:
                 with lease:
@@ -378,6 +383,17 @@ class Record:
                 raise TimeoutError(f"{self!r} is still being built by another process after {timeout} s")
             time.sleep(delay)
             delay = min(delay * 2, 2.0)
+
+    def _check_upstream(self, inputs: dict) -> None:
+        """Raise before a build if a record among the spec fields or inputs is not done."""
+        for name, value in [("spec", self.spec), *sorted(inputs.items())]:
+            for record in _records_in(value):
+                status = record.status
+                if status != "done":
+                    raise ValueError(
+                        f"cannot build {self!r}: its {'spec holds' if name == 'spec' else f'input {name!r} is or holds'} "
+                        f"{record!r}, which is {status}; build it first with {type(record).__qualname__}.get(...)"
+                    )
 
     def _run_build(self, inputs: dict, previous: dict | None, recipe: Callable[[], None] | None = None) -> None:
         cls = type(self)
@@ -398,6 +414,7 @@ class Record:
             "spec_type": f"{type(self.spec).__module__}:{type(self.spec).__qualname__}",
             "spec": self.spec.to_dict(),
             "inputs": cls._identify(inputs),
+            "upstream": {r.key: str(r.path) for v in (self.spec, inputs) for r in _records_in(v)},
             "status": "running",
             "fields": fields,
             "created": (previous or {}).get("created") or _now(),
@@ -542,6 +559,37 @@ class Record:
     def error(self) -> dict | None:
         meta = self._disk_meta()
         return meta.get("error") if meta else None
+
+    @property
+    def inputs(self) -> dict[str, Any]:
+        """The keyword inputs this record was built from, by name: records reopened, arrays as
+        their `Digest`, other values in canonical form.
+
+        An input record is reopened from the path stored at build time, else from its type's
+        current root; if it is in neither place, the handle points at the stored path and its
+        status is `absent`.
+        """
+        meta = self.meta
+        return {name: _revive_tags(value, meta.get("upstream", {})) for name, value in meta["inputs"].items()}
+
+    def lineage(self) -> list["Record"]:
+        """Every record this one was built from, as an input or a spec field, directly or through
+        other records: each once, upstream records before the records built from them."""
+        order: list[Record] = []
+        seen: set[str] = set()
+
+        def visit(record: Record) -> None:
+            meta = record._disk_meta()
+            if meta is None:
+                return
+            for upstream in _upstream_of(meta):
+                if upstream.key not in seen:
+                    seen.add(upstream.key)
+                    visit(upstream)
+                    order.append(upstream)
+
+        visit(self)
+        return order
 
     def _manifest(self) -> dict:
         if self._writable:
@@ -765,7 +813,22 @@ class Record:
     # ----- identity protocol -----------------------------------------------------------------
 
     def __tensordir_canonical__(self, *, full: bool = False) -> dict:
-        return {"__record__": type(self).type_id(), "key": self.key}
+        """`{"__record__": type, "key": key}`; a workspace record adds the time of its last edit
+        (`modified`), so records built from it get new keys after it changes. The full form, stored
+        in `_record.json`, adds the path the record is reopened from."""
+        out = {"__record__": type(self).type_id(), "key": self.key}
+        if type(self).mutable:
+            meta = self._disk_meta()
+            done = meta is not None and meta.get("status") == "done"
+            out["modified"] = (meta.get("modified") or meta.get("finished")) if done else None
+        if full:
+            out["path"] = str(self._path)
+        return out
+
+    @classmethod
+    def __tensordir_revive__(cls, value: Mapping) -> "Record":
+        """Reopen a record from its full canonical form (a record stored in a spec field)."""
+        return _open_upstream(value, {}, cls)
 
     def __reduce__(self):
         return _reopen, (type(self).type_id(), self.key, str(self._path))
@@ -852,6 +915,73 @@ class Record:
             )
             out.append("</tbody></table>")
         return "".join(out)
+
+
+def _records_in(value: Any) -> Iterator[Record]:
+    """The records in `value`, searching specs, mappings and sequences."""
+    if isinstance(value, Record):
+        yield value
+    elif isinstance(value, _Spec):
+        for f in dataclasses.fields(value):
+            yield from _records_in(getattr(value, f.name))
+    elif isinstance(value, Mapping):
+        for item in value.values():
+            yield from _records_in(item)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            yield from _records_in(item)
+
+
+def _tags_in(value: Any) -> Iterator[dict]:
+    """The record tags (`{"__record__": ...}`) in a canonical value."""
+    if isinstance(value, dict):
+        if "__record__" in value:
+            yield value
+        else:
+            for item in value.values():
+                yield from _tags_in(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _tags_in(item)
+
+
+def _revive_tags(value: Any, paths: Mapping[str, str]) -> Any:
+    if isinstance(value, dict):
+        if "__record__" in value:
+            return _open_upstream(value, paths)
+        if set(value) <= {"__float__", "__digest__"}:
+            return untag(value)
+        return {k: _revive_tags(v, paths) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_revive_tags(v, paths) for v in value]
+    return value
+
+
+def _upstream_of(meta: dict) -> list[Record]:
+    """The records named in a record's stored spec and inputs."""
+    paths = meta.get("upstream", {})
+    return [_open_upstream(tag, paths) for part in (meta.get("spec"), meta.get("inputs")) for tag in _tags_in(part)]
+
+
+def _open_upstream(tag: Mapping, paths: Mapping[str, str], cls: type[Record] | None = None) -> Record:
+    """The record a tag names: at its stored path, else under its type's current root."""
+    type_id, key = tag["__record__"], tag["key"]
+    klass = resolve_type(type_id)
+    if cls is not None and not issubclass(klass, cls):
+        if klass is not Record:
+            raise TypeError(f"{type_id} {key[:16]} is a {klass.__qualname__}, not a {cls.__qualname__}")
+        klass = cls
+    stored = tag.get("path") or paths.get(key)
+    candidates = [Path(stored)] if stored else []
+    if klass is not Record:
+        candidates.append(klass.resolve_root() / klass.dirname() / key[:16])
+    if not candidates:
+        raise FileNotFoundError(f"no path is stored for {type_id} {key[:16]} and its type is not registered")
+    for path in candidates:
+        meta = _read_json(path / META)
+        if meta is not None and meta.get("key") == key:
+            return klass._new(path, key=key, managed_root=_managed_root(path, key))
+    return klass._new(candidates[0], key=key, managed_root=_managed_root(candidates[0], key))
 
 
 def _check_type(name: str, annotation: Any, value: Any) -> None:
