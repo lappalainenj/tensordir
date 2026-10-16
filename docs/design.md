@@ -31,20 +31,38 @@ Golden keys in the test suite pin the format. A change that alters them orphans 
 
 ## Roots
 
-A record type's root is resolved when a record is located or queried; the first match wins:
+A record type stores its records under `base / path`, joined with pathlib's `/`:
 
-1. the `root=` argument of `get`, `locate`, `lookup` or `query`,
-2. the innermost `with td.use_root(path)` block,
-3. the class's `root` attribute, set directly or with `@td.root(path)` (inherited by subclasses),
-4. `td.set_root(path)`,
-5. `$TENSORDIR_ROOT`.
+- The **base root** is the innermost `with td.use_root(path)` block, else `td.set_root(path)`,
+  else `$TENSORDIR_ROOT`, else the working directory at the moment the root is resolved.
+- `path` is the `root=` argument of `get`, `locate`, `lookup`, `query` or `info`, else the class's
+  `root` attribute (set directly or with `@td.root(path)`, inherited by subclasses), else
+  nothing. A `root=` argument replaces the class root; it is not joined onto it.
+- A relative `path` extends the base root; an absolute `path` replaces it. `~` is expanded.
 
-`Record.resolve_root()` returns the result. Class roots let record types live apart, as flyvis
-keeps renderings and trained networks in separate trees. Every root carries its own
-`.tensordir/` with leases, temporary builds and index, so `Fit.query()` and
-`td.reindex(Fit)` work on `Fit`'s root. A `use_root` block redirects every record type,
-including those with a class root; tests use it to keep everything in a temporary directory.
-The root never enters the key: the same record can be copied between roots.
+| base root | class root | `root=` | records go to |
+|---|---|---|---|
+| unset (working directory `/home/me/project`) | `"connectomes"` | | `/home/me/project/connectomes` |
+| `TENSORDIR_ROOT=/data` | `"connectomes"` | | `/data/connectomes` |
+| `TENSORDIR_ROOT=/data` | | | `/data` |
+| `use_root("/tmp/test")` | `"connectomes"` | | `/tmp/test/connectomes` |
+| `use_root("/tmp/test")` | `"/archive/stimuli"` | | `/archive/stimuli` |
+| `TENSORDIR_ROOT=/data` | `"connectomes"` | `"scratch"` | `/data/scratch` |
+| any | `"connectomes"` | `"/fast/run1"` | `/fast/run1` |
+
+`td.get_root(Fit)` (or `Fit.resolve_root()`) prints where `Fit` records go now; `td.get_root()`
+gives the base root. The class root is stored as given and joined on every access, so a
+`use_root` block in a test redirects every record type with a relative root, while types with
+an absolute root stay where they are. Relative values given to `set_root` and `use_root` are
+resolved against the working directory when they are set; a relative `$TENSORDIR_ROOT` is
+resolved when it is read. For a root next to a source file, write the absolute path:
+`@td.root(Path(__file__).parent / "data")`.
+
+Every resolved root carries its own `.tensordir/` with leases, temporary builds and index, so
+`Fit.query()`, `Fit.info()` and `td.reindex(Fit)` work on `Fit`'s resolved root, and
+`tensordir --root connectomes ls` joins `--root` onto the base root the same way. Class roots
+let record types live apart, as flyvis keeps renderings and trained networks in separate
+trees. The root never enters the key: the same record can be copied between roots.
 
 ## Layout and lifecycle
 
@@ -314,5 +332,6 @@ other files and subdirectories. There are no import aliases for datamate's API.
   them.
 - Parquet drops the categories of empty categorical columns.
 - `since=` doesn't support changing a field's default later (see Keys).
-- Context roots set with `use_root` don't propagate into new threads. Pass `root=` or call
-  `set_root` instead.
+- Context roots set with `use_root` don't propagate into new threads, which resolve against
+  `set_root`, `$TENSORDIR_ROOT` or the working directory instead. Pass `root=`, call `set_root`,
+  or start the thread with `contextvars.copy_context().run`.

@@ -13,10 +13,6 @@ class DimsError(TensordirError, ValueError):
     """An annotation does not map to a tuple of xarray dimension names."""
 
 
-class RootNotSet(TensordirError, RuntimeError):
-    """No storage root was given, set with `set_root`, or found in `TENSORDIR_ROOT`."""
-
-
 class ReadOnlyError(TensordirError, PermissionError):
     """A write was attempted outside of `Record.build`."""
 

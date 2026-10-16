@@ -14,7 +14,6 @@ from .errors import (
     KeyCollision,
     ReadOnlyError,
     RecordBusy,
-    RootNotSet,
     TensordirError,
 )
 from .external import DeltaRef, ParquetRef, SnapshotChanged
@@ -67,7 +66,6 @@ __all__ = [
     "ReadOnlyError",
     "Record",
     "RecordBusy",
-    "RootNotSet",
     "SnapshotChanged",
     "Spec",
     "SpecDiff",

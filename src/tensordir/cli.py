@@ -81,7 +81,11 @@ def _gc(root: Path, args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tensordir", description="Inspect and maintain a tensordir root.")
-    parser.add_argument("--root", help="storage root (default: $TENSORDIR_ROOT)")
+    parser.add_argument(
+        "--root",
+        help="storage root, joined onto the base root ($TENSORDIR_ROOT, else the working directory); "
+        "absolute paths are used as given (default: the base root)",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     ls = commands.add_parser("ls", help="list records, optionally of one record type directory")
     ls.add_argument("type", nargs="?", help="record type directory name, e.g. Fit")
@@ -93,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     gc.add_argument("--dry-run", action="store_true")
     gc.set_defaults(run=_gc)
     args = parser.parse_args(argv)
-    return args.run(get_root(args.root), args)
+    return args.run(get_root(root=args.root), args)
 
 
 if __name__ == "__main__":

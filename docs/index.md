@@ -26,6 +26,12 @@ Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray r
 | Read datamate directories | `tensordir.legacy.open_datamate` |
 | Maintain a root | `tensordir ls`, `status`, `reindex`, `gc` |
 
+**Where records go.** A record type stores its records under `base / root`: the base root is
+the innermost `use_root` block, else `set_root`, else `$TENSORDIR_ROOT`, else the working
+directory; `root` is a `root=` argument, else the class's `root` (`@td.root(path)`). A relative
+`root` extends the base root, an absolute one replaces it, as with `pathlib`'s `/`.
+`td.get_root(Fit)` shows the result; [Design](design.md#roots) has examples.
+
 See the quickstart in the repository's `README.md`, [migrating](migrating.md) from datamate,
 flyvis and another project, [extending](extending.md) tensordir, the [design](design.md) and the
 [history](history.md) of the package.

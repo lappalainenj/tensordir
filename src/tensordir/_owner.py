@@ -21,7 +21,6 @@ import inspect
 import os
 import threading
 import typing
-from pathlib import Path
 from typing import Annotated, Any
 
 from ._record import Record
@@ -132,8 +131,9 @@ def record(
       (`mutable=True`) that accepts `obj.record.x = value` at any time.
     - `Cls.Spec` and `Cls.Record` are the generated classes; `Cls.Record.query(lr=0.1)` finds runs.
 
-    `name` is the record type id (default: the class's qualified name), `root` its default root,
-    `base` a `Record` subclass providing typed fields, `dims`, codecs or a `build`.
+    `name` is the record type id (default: the class's qualified name), `root` its class root
+    (joined onto the base root, see `tensordir.get_root`), `base` a `Record` subclass providing
+    typed fields, `dims`, codecs or a `build`.
     """
     if cls is None:
         return lambda c: record(c, name=name, root=root, base=base, mutable=mutable, schema_version=schema_version)
@@ -183,7 +183,7 @@ def record(
         "__qualname__": f"{cls.__qualname__}.Record",
     }
     if root is not None:
-        record_ns["root"] = Path(root).expanduser().absolute()
+        record_ns["root"] = root
     record_cls = type("Record", (base,), record_ns)
 
     @functools.wraps(init)

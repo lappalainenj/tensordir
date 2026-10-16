@@ -130,8 +130,9 @@ class Record:
     heartbeat_interval: ClassVar[float | None] = None
     #: Size-name → dimension-name overrides for this record's typed fields.
     dims: ClassVar[Mapping[str, str]] = {}
-    #: Default root of this record type (also set by `@tensordir.root(path)`). `root=` arguments
-    #: and `use_root` blocks take precedence; `set_root` and `$TENSORDIR_ROOT` apply without it.
+    #: Root of this record type (also set by `@tensordir.root(path)`), joined onto the base root
+    #: (`use_root`, `set_root`, `$TENSORDIR_ROOT` or the working directory) on every access: a
+    #: relative path extends it, an absolute one replaces it. A `root=` argument replaces it.
     root: ClassVar[str | os.PathLike | None] = None
     #: Workspace record: fields may be written, appended and deleted after the build is done (by
     #: any process; each edit holds the lease briefly). The key still names the spec and inputs,
@@ -223,9 +224,9 @@ class Record:
 
     @classmethod
     def resolve_root(cls, root: str | os.PathLike | None = None) -> Path:
-        """Where records of this type live: `root`, else the innermost `use_root`, else the class's
-        `root`, else `set_root`, else `$TENSORDIR_ROOT`."""
-        return get_root(root, class_root=cls.root)
+        """Where records of this type live: `tensordir.get_root(cls, root=root)`, i.e. the base root
+        joined with `root` if given, else with the class's `root`."""
+        return get_root(cls, root=root)
 
     @classmethod
     def locate(cls, spec: Any = None, /, *, root: str | os.PathLike | None = None, **inputs: Any) -> Self:

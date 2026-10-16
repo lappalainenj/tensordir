@@ -184,8 +184,8 @@ def test_pickle_reopens_by_identity(root):
 
 def test_root_resolution(tmp_path, monkeypatch):
     monkeypatch.delenv("TENSORDIR_ROOT", raising=False)
-    with pytest.raises(td.RootNotSet):
-        Square.locate({"n": 1})
+    monkeypatch.chdir(tmp_path)
+    assert Square.locate({"n": 1}).path.parent.parent == tmp_path  # the working directory
     monkeypatch.setenv("TENSORDIR_ROOT", str(tmp_path / "env"))
     assert Square.locate({"n": 1}).path.parent.parent == tmp_path / "env"
     td.set_root(tmp_path / "default")

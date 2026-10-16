@@ -30,7 +30,7 @@ spec or inputs.
 | | `Namespace(a=1, model=Namespace(lr=0.1))` | nested `Spec` classes, `spec.replace(model__lr=0.1)` |
 | | config fields that do not change the result (device) | `td.field("cpu", hashed=False)` |
 | | adding a config field without orphaning results | `td.field(default, since=2)` |
-| | `@root(path)` class decorator | `@td.root(path)` or the class attribute `root = path` |
+| | `@root(path)` class decorator | `@td.root(path)` or the class attribute `root = path`; a relative path is joined onto the base root ([rule](design.md#roots)) |
 | | `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
 | | building from another directory's contents | inputs: `Cluster.get(spec, points=points_record, weights=array)` |
 | | reading a Delta export (another project `export.to_table()`), caching by release version | a `td.DeltaRef(uri, version=...)` spec field; `ref.to_table(columns=, filter=)`, `ref.duckdb()`, `ref.materialize(self, name)` |

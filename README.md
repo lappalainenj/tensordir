@@ -23,7 +23,7 @@ import numpy as np
 import tensordir as td
 from jaxtyping import Float
 
-td.set_root("results")  # or $TENSORDIR_ROOT, `with td.use_root(path):`, or @td.root(path) per class
+td.set_root("results")  # base root; default: $TENSORDIR_ROOT, else the working directory
 
 class Fit(td.Record):
     __record_name__ = "Fit"  # stable type id: keys survive module moves
