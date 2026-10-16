@@ -320,10 +320,14 @@ uses the codec registry:
   `table.td.where(...)` and `responses.td.where(...)` call `tensordir.where`;
   `series.td.where("<0.1", cell_type="T4a")` filters a Series by value and by index level;
   `table.td.diff(a, b)` and `row.td.diff(other)` diff two table rows on their `spec.` columns.
-  xarray accessors have no `diff`: coordinates are not specs. This side effect costs about
-  0.4 s of import time (pandas and xarray). If another package has already registered `.td`,
-  tensordir warns and keeps the other accessor; `TENSORDIR_NO_ACCESSORS=1` skips registration
-  and the imports.
+  xarray accessors have no `diff`: coordinates are not specs. If another package has already
+  registered `.td`, tensordir warns and keeps the other accessor.
+- **Import time.** Registering the accessors imports pandas and xarray, which makes
+  `import tensordir` about 0.45 s slower: 0.79 s instead of 0.32 s (median of ten fresh
+  processes on a laptop; `python -X importtime` attributes 0.28 s to pandas and 0.05 s to
+  xarray). `TENSORDIR_NO_ACCESSORS=1` in the environment skips registration and both imports;
+  `table.pipe(td.where, seed=[0, 1])` and `td.where(responses, cell_type="T4a")` do the same
+  filtering without accessors.
 - `Collection.table()` gives one row per record; `varying_only=True` keeps the spec columns that
   differ. `Fit.info(depth=, include=, **filters)` is `Fit.query(status=None, **filters).table(...)`
   in one call (another project's `info`), and `record.info()` is a record's one-row table.

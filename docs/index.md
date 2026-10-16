@@ -32,6 +32,11 @@ directory; `root` is a `root=` argument, else the class's `root` (`@td.root(path
 `root` extends the base root, an absolute one replaces it, as with `pathlib`'s `/`.
 `td.get_root(Fit)` shows the result; [Design](design.md#roots) has examples.
 
+**Import time.** `import tensordir` registers `.td` accessors on pandas and xarray objects and
+therefore imports both libraries, about 0.45 s. Set `TENSORDIR_NO_ACCESSORS=1` to skip that,
+and use `df.pipe(td.where, ...)` instead of `df.td.where(...)`; see
+[Collections and views](design.md#collections-and-views).
+
 See the quickstart in the repository's `README.md`, [migrating](migrating.md) from datamate,
 flyvis and another project, [extending](extending.md) tensordir, the [design](design.md) and the
 [history](history.md) of the package.

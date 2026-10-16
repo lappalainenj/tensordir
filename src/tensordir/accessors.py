@@ -9,8 +9,12 @@ table.td.diff(0, 1)                             # what differs between two rows'
 
 Importing tensordir imports pandas and xarray if they are installed and registers the accessors
 on `DataFrame`, `Series`, `DataArray` and `Dataset`. If another package registered `.td` first,
-tensordir warns and leaves it in place; `tensordir.where` works either way. Set the environment
-variable `TENSORDIR_NO_ACCESSORS=1` to skip registration (and those imports).
+tensordir warns and leaves it in place; `tensordir.where` works either way.
+
+Import time: those imports make `import tensordir` take about 0.45 s longer (measured on a
+laptop: 0.79 s with, 0.32 s without). Set the environment variable `TENSORDIR_NO_ACCESSORS=1`
+before importing tensordir to skip registration and both imports; then call the function
+instead, e.g. `table.pipe(td.where, seed=[0, 1])` or `td.where(responses, cell_type="T4a")`.
 """
 
 import importlib.util

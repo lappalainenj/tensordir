@@ -72,8 +72,11 @@ def test_registration_is_idempotent_and_does_not_overwrite(monkeypatch):
 
 def test_opt_out_environment_variable():
     code = (
-        "import sys, tensordir, pandas as pd; "
-        "assert not hasattr(pd.DataFrame, 'td'); print('ok')"
+        "import sys, tensordir as td; "
+        "assert 'pandas' not in sys.modules and 'xarray' not in sys.modules, 'imported'; "
+        "import pandas as pd, xarray as xr; "
+        "assert not hasattr(pd.DataFrame, 'td') and not hasattr(xr.DataArray, 'td'); "
+        "assert pd.DataFrame({'a': [1, 2]}).pipe(td.where, a=2)['a'].tolist() == [2]; print('ok')"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, env={**_env(), "TENSORDIR_NO_ACCESSORS": "1"}
