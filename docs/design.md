@@ -289,9 +289,12 @@ Delta table version, which Delta can still read until it is vacuumed.
 Typed fields use jaxtyping annotations. Their shape strings become zarr `dimension_names`, so
 `xr.open_zarr(record.path / "data.zarr")` gives a labeled Dataset.
 
-- A size `n_<things>` becomes the dimension `<thing>`: drop `n_` and one trailing `s`.
-- Irregular plurals (`n_vertices` → `vertex`, `n_radii` → `radius`, ...) come from a built-in
-  table, `register_dims`, or a record's `dims` mapping.
+- A size `n_<things>` becomes the dimension `<thing>`: drop `n_`, then singularize by suffix.
+  Words ending in `ss`, `is` or `us` stay (`n_basis` → `basis`); `ies` becomes `y`
+  (`n_entries` → `entry`); `sses`, `shes`, `ches`, `xes` and `zzes` drop `es`
+  (`n_batches` → `batch`); any other trailing `s` is dropped (`n_cases` → `case`).
+- Irregular plurals (`n_vertices` → `vertex`, `n_radii` → `radius`, `n_caches` → `cache`, ...)
+  come from a built-in table, `register_dims`, or a record's `dims` mapping.
 - `name=size` tokens use `name`: `"pre=n_types post=n_types"` gives `("pre", "post")`.
 - Symbolic (`n_bins+1`), literal (`2`), anonymous (`_`), variadic (`*batch`, `...`) and repeated
   dimensions are rejected. Write `Annotated[..., Dims("bin_edge")]`, or pass `dims=` to `write`.

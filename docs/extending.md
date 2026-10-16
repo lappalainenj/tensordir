@@ -320,7 +320,8 @@ assert float(abs(quantized.voltage - exact.voltage).max()) <= 0.5e-3 + 1e-12
 
 ## Dimension names
 
-Typed fields name their axes from the jaxtyping shape string: `n_<things>` becomes `<thing>`.
+Typed fields name their axes from the jaxtyping shape string: `n_<things>` becomes `<thing>`
+(`n_batches` → `batch`, `n_basis` → `basis`; [the rule](design.md#dimension-names)).
 Register irregular plurals for the process, override names for one record class with `dims`, or
 name an axis explicitly with `Dims`.
 

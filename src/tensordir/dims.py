@@ -1,8 +1,9 @@
 """Map jaxtyping shape strings to xarray dimension names.
 
 Sizes are named `n_<things>` (`n_cells`, `n_timesteps`); xarray dimensions are the singular thing
-(`cell`, `timestep`). The default rule strips `n_` and one trailing `s`; irregular plurals come
-from a registry (`register_dims`) or a record class's `dims` mapping. `name=size` tokens
+(`cell`, `timestep`). The default rule strips `n_` and singularizes the rest (`_singular`);
+irregular plurals come from a built-in table, a registry (`register_dims`) or a record class's
+`dims` mapping. `name=size` tokens
 (`"pre=n_types post=n_types"`) use `name`. Symbolic (`n_bins+1`), literal (`2`), anonymous (`_`)
 and variadic (`*batch`, `...`) dimensions have no name and need explicit `Dims(...)`.
 """
@@ -27,6 +28,10 @@ _IRREGULAR = {
     "n_analyses": "analysis",
     "n_series": "series",
     "n_species": "species",
+    "n_caches": "cache",
+    "n_niches": "niche",
+    "n_movies": "movie",
+    "n_cookies": "cookie",
 }
 _REGISTRY: dict[str, str] = {}
 
@@ -55,11 +60,21 @@ def dim_name(size: str, overrides: Mapping[str, str] | None = None) -> str:
         if size in table:
             return table[size]
     if size.startswith("n_") and len(size) > 2:
-        base = size[2:]
-        if base.endswith("s") and not base.endswith("ss") and len(base) > 1:
-            base = base[:-1]
-        return base
+        return _singular(size[2:])
     return size
+
+
+def _singular(word: str) -> str:
+    """English singular by suffix: `-ss`, `-is` and `-us` are already singular (`basis`,
+    `status`); `-ies` → `-y` (`entries`); `-sses`, `-shes`, `-ches`, `-xes`, `-zzes` drop `-es`
+    (`batches`, `boxes`); any other trailing `s` is dropped (`cells`, `cases`)."""
+    if len(word) <= 1 or not word.endswith("s") or word.endswith(("ss", "is", "us")):
+        return word
+    if word.endswith("ies") and len(word) > 4:
+        return word[:-3] + "y"
+    if word.endswith(("sses", "shes", "ches", "xes", "zzes")):
+        return word[:-2]
+    return word[:-1]
 
 
 def _unwrap(annotation: Any) -> tuple[Any, Dims | None]:
