@@ -40,6 +40,7 @@ def test_layout_and_metadata(root):
     prov = meta["provenance"]
     assert prov["pid"] > 0 and prov["host"] and "numpy" in prov["packages"]
     assert prov["git"] is None or set(prov["git"]) == {"repo", "commit", "dirty"}
+    assert prov["tensordir_git"] is None or set(prov["tensordir_git"]) == {"repo", "commit", "dirty"}
     assert meta["duration_s"] >= 0 and meta["finished"] >= meta["created"]
     assert not list((root / ".tensordir" / "tmp").iterdir())
     assert rec.keys() == ["summary", "values"] and "values" in rec

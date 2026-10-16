@@ -75,4 +75,6 @@ def collect(cls: type) -> dict:
         "argv": list(sys.argv),
         "packages": {k: v for k, v in packages.items() if v is not None},
         "git": git_info(Path(source).resolve().parent) if source else None,
+        # An editable install reports one package version for every commit of tensordir itself.
+        "tensordir_git": git_info(Path(__file__).resolve().parent),
     }

@@ -78,8 +78,8 @@ trees. The root never enters the key: the same record can be copied between root
 
 `_record.json` stores the full key, so a 16-hex prefix collision raises `KeyCollision` instead of
 returning the wrong record. Provenance covers the host, pid, user, Slurm/LSF job id, Python and
-package versions, argv, and the git commit and dirty flag of the repository defining the record
-class.
+package versions, argv, the git commit and dirty flag of the repository defining the record
+class, and those of tensordir's own repository when it is installed from a checkout.
 
 `Record.get` loops until it can return a `done` record:
 
