@@ -10,7 +10,7 @@ import traceback
 import types
 import typing
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Literal, Self
@@ -343,7 +343,16 @@ class Record:
             return
         raise NotImplementedError(f"{type(self).__qualname__} does not define build()")
 
-    def _obtain(self, inputs: dict, *, block: bool, timeout: float | None, retry_failed: bool) -> Self:
+    def _obtain(
+        self,
+        inputs: dict,
+        *,
+        block: bool,
+        timeout: float | None,
+        retry_failed: bool,
+        recipe: Callable[[], None] | None = None,
+    ) -> Self:
+        """Wait for or run the build; `recipe` replaces `self.build(spec, **inputs)` if given."""
         cls = type(self)
         deadline = None if timeout is None else time.monotonic() + timeout
         delay = 0.01
@@ -361,7 +370,7 @@ class Record:
                         return self
                     if meta and meta["status"] == "failed" and not retry_failed:
                         raise BuildFailed(self, meta.get("error") or {})
-                    self._run_build(inputs, previous=meta)
+                    self._run_build(inputs, previous=meta, recipe=recipe)
                 return self
             if not block:
                 raise RecordBusy(self)
@@ -370,7 +379,7 @@ class Record:
             time.sleep(delay)
             delay = min(delay * 2, 2.0)
 
-    def _run_build(self, inputs: dict, previous: dict | None) -> None:
+    def _run_build(self, inputs: dict, previous: dict | None, recipe: Callable[[], None] | None = None) -> None:
         cls = type(self)
         t0 = time.monotonic()
         if cls.in_place:
@@ -402,7 +411,10 @@ class Record:
         self.__dict__.update(_dir=workdir, _meta=meta, _writable=True)
         try:
             self._write_meta()
-            self.build(self.spec, **inputs)
+            if recipe is None:
+                self.build(self.spec, **inputs)
+            else:
+                recipe()
             self._check_sizes()
         except Exception as exc:
             self._writable = False
@@ -514,13 +526,16 @@ class Record:
 
     @property
     def status(self) -> Status:
-        """`absent`, `running`, `done`, `failed`, or `stale` (a build whose lease expired)."""
+        """`absent`, `running`, `done`, `failed`, or `stale` (a build whose lease expired). A failed
+        record that is being rebuilt (`retry_failed=True`) is `running`."""
         meta = self._disk_meta()
-        if meta is not None and meta["status"] in ("done", "failed"):
-            return meta["status"]
+        if meta is not None and meta["status"] == "done":
+            return "done"
         state = lease_state(self._lock, type(self).lease_ttl)
         if meta is None:
             return {"absent": "absent", "fresh": "running", "stale": "stale"}[state]
+        if meta["status"] == "failed":
+            return "running" if state == "fresh" else "failed"
         return "running" if state == "fresh" else "stale"
 
     @property

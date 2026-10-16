@@ -21,9 +21,12 @@ def _lock(root: Path, path: Path) -> Path:
 
 
 def _status(root: Path, path: Path, meta: dict) -> str:
-    if meta.get("status") in ("done", "failed"):
-        return meta["status"]
-    return "running" if _lease.lease_state(_lock(root, path), DEFAULT_TTL) == "fresh" else "stale"
+    if meta.get("status") == "done":
+        return "done"
+    fresh = _lease.lease_state(_lock(root, path), DEFAULT_TTL) == "fresh"
+    if meta.get("status") == "failed":
+        return "running" if fresh else "failed"
+    return "running" if fresh else "stale"
 
 
 def _ls(root: Path, args: argparse.Namespace) -> int:

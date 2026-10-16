@@ -5,11 +5,12 @@
 class Trainer:
     def __init__(self, lr: float = 0.1, n_steps: int = 100, device: Annotated[str, td.field(hashed=False)] = "cpu"):
         self.model = make_model()
+        self.record.config_note = "..."  # __init__ is the build: the record is `running` meanwhile
 
     def step(self, losses):
-        self.record.losses = losses   # a workspace record keyed by (lr, n_steps)
+        self.record.losses = losses   # a workspace record keyed by (lr, n_steps), writable any time
 
-trainer = Trainer(lr=0.1)
+trainer = Trainer(lr=0.1)             # builds the record, or reruns __init__ on the finished one
 trainer.lr = 0.2                      # the next `trainer.record` is the record for lr=0.2
 ```
 """
@@ -24,6 +25,7 @@ import typing
 from typing import Annotated, Any
 
 from ._record import Record
+from .errors import BuildFailed
 from .spec import FieldOptions, Spec, field
 
 __all__ = ["record", "transient"]
@@ -127,13 +129,20 @@ def record(
     - Spec fields become instance attributes backed by `self.spec`. Assigning one
       (`obj.lr = 0.2`, also inside `__init__`) replaces the spec; if the key changes, the next
       `obj.record` is the record for the new spec. Changing an unhashed field keeps the record.
-    - `obj.record` is created lazily with `Cls.Record.get(obj.spec)`: a workspace record
-      (`mutable=True`) that accepts `obj.record.x = value` at any time.
+    - `__init__` is the build. If the record is not `done`, constructing the object takes the
+      record's lease and runs `__init__` as the build: the record is `running` meanwhile, `done`
+      when `__init__` returns, `failed` (traceback stored, exception re-raised) if it raises;
+      the next construction retries. Another process constructing the same spec waits for the
+      lease. If the record is already `done`, `__init__` runs without the lease on that record.
+    - `obj.record` is that record: a workspace record (`mutable=True`) that accepts
+      `obj.record.x = value` and `append` at any time after the build, without changing its
+      status; each edit updates `meta["modified"]`.
     - `Cls.Spec` and `Cls.Record` are the generated classes; `Cls.Record.query(lr=0.1)` finds runs.
 
     `name` is the record type id (default: the class's qualified name), `root` its class root
     (joined onto the base root, see `tensordir.get_root`), `base` a `Record` subclass providing
-    typed fields, `dims`, codecs or a `build`.
+    typed fields, `dims`, codecs or `in_place`. `mutable=False` makes the record read-only once
+    `__init__` has built it.
     """
     if cls is None:
         return lambda c: record(c, name=name, root=root, base=base, mutable=mutable, schema_version=schema_version)
@@ -196,8 +205,27 @@ def record(
         for arg, f in factories.items():
             if bound.arguments[arg] is f:
                 bound.arguments[arg] = _default_of(f)
-        self.__dict__[_STATE] = _State(spec_cls(**{arg: bound.arguments[arg] for arg in annotations}))
-        init(*bound.args, **bound.kwargs)
+        state = _State(spec_cls(**{arg: bound.arguments[arg] for arg in annotations}))
+        self.__dict__[_STATE] = state
+        state.record = record_cls.locate(state.spec)
+        built = False
+
+        def recipe() -> None:
+            nonlocal built
+            built = True
+            init(*bound.args, **bound.kwargs)
+
+        error: BaseException | None = None
+        try:  # __init__ is the build: under the lease, `running` until it returns
+            state.record._obtain({}, block=True, timeout=None, retry_failed=True, recipe=recipe)
+        except BuildFailed as exc:
+            if not built or exc.__cause__ is None:
+                raise
+            error = exc.__cause__
+        if error is not None:
+            raise error  # the caller's own exception; the failed record keeps the traceback
+        if not built:  # already done: run __init__ again on the existing record
+            init(*bound.args, **bound.kwargs)
 
     __init__.__tensordir_original__ = init
     for arg in annotations:

@@ -84,7 +84,7 @@ def query(cls, *, root: str | os.PathLike | None = None, status: str | Sequence[
             continue
         record = cls._new(path, key=meta["key"], managed_root=base)
         if wanted is not None:
-            current = meta["status"] if meta["status"] in ("done", "failed") else record.status
+            current = meta["status"] if meta["status"] == "done" else record.status
             if current not in wanted:
                 continue
         if not conds or _matches(spec_dict(cls, meta.get("spec", {})), conds):

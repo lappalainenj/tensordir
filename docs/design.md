@@ -88,8 +88,8 @@ class.
 3. Otherwise wait with exponential backoff (capped at 2 s), up to `timeout`. With `block=False`,
    raise `RecordBusy` instead.
 
-An exception in `build` stores a `failed` record with the traceback. `KeyboardInterrupt` and
-`SystemExit` leave no record behind.
+An exception in `build` stores a `failed` record with the traceback; while `retry_failed=True`
+rebuilds it, its status is `running`. `KeyboardInterrupt` and `SystemExit` leave no record behind.
 
 `in_place = True` builds in the final directory, so readers see fields and `append`ed rows while
 the build runs (training logs). A rebuild after a crash keeps what the earlier attempt wrote,
@@ -133,8 +133,8 @@ checkpoints and summaries into it over time. Rules:
 ## Classes that own a record
 
 `@td.record` turns a regular class into one whose `__init__` arguments are a spec and whose
-`self.record` is a workspace record for that spec; it is datamate's `Directory.__init__` without
-the build-once semantics.
+`self.record` is a workspace record for that spec. As with datamate's `Directory.__init__`, the
+first construction is the build; unlike it, the record stays writable afterwards.
 
 ```python
 @td.record
@@ -155,18 +155,30 @@ class Trainer:
   `trainer.lr = 0.2` (also inside `__init__`) replaces the spec with `spec.replace(lr=0.2)`. If
   the key changes, the next `trainer.record` is the record for the new spec; earlier handles keep
   pointing at the old record. Changing an unhashed field keeps the record.
-- **Records.** `trainer.record` calls `Trainer.Record.get(trainer.spec)` on first use, so nothing
-  is written for objects that never touch it, and the root is resolved at that moment.
-  `Trainer.Record` is a `mutable` record type named `Trainer` (or `name=`), with `root=`,
-  `schema_version=` and a `base=` record class for typed fields, `dims` and codecs.
-- **Build and reopen.** `__init__` runs on every construction; it is not a build. Constructing
-  `Trainer(lr=0.1)` again, in any process, reopens the same record with everything written so
-  far, so a training loop can resume or skip finished work (`"loss" in trainer.record`). A
-  `base=` class with a `build` and `mutable=False` gives build-once records instead.
+- **Records.** `trainer.record` is the record for `trainer.spec`, a `mutable` record type named
+  `Trainer` (or `name=`), with `root=`, `schema_version=` and a `base=` record class for typed
+  fields, `dims`, codecs or `in_place`. Its root is resolved when the object is constructed.
+- **Lifecycle.** `__init__` is the build:
+
+    | moment | status | writes through `self.record` |
+    |---|---|---|
+    | construction, record not `done` | takes the lease, then `running` | go into the build, as in `Record.build` |
+    | `__init__` returns | `done` | |
+    | `__init__` raises | `failed`, traceback stored; the exception propagates | discarded |
+    | construction, record `done` | stays `done`; `__init__` runs again without the lease | edits |
+    | any time after the build | stays `done` | edits; each updates `meta["modified"]` |
+
+    A process constructing the same spec while another runs `__init__` waits for the lease, like
+    `Record.get`, and then runs its own `__init__` on the finished record; so a training loop can
+    resume or skip finished work (`"loss" in self.record`). A `failed` record is rebuilt by the
+    next construction. Edits on the finished record (`obj.record.x = v`, `append`, `del`) take the
+    lease briefly and never change the status. With `mutable=False` the record becomes read-only
+    once `__init__` has built it.
 - **Threads.** Creating and switching the record is locked per instance, and record edits are
   serialized by the lease. Changing spec attributes while other threads write through
   `obj.record` is still a race: their writes go to whichever record they fetched.
-- Instances pickle with their spec; the record is reopened on first use after unpickling.
+- Instances pickle with their spec; unpickling does not run `__init__`, and the record is
+  reopened on first use.
   Decorated subclasses get their own spec from their own `__init__`.
 
 ## Concurrency on shared filesystems

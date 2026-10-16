@@ -3,6 +3,7 @@
 import os
 import time
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
 from jaxtyping import Float
@@ -63,6 +64,29 @@ class Hangs(td.Record):
 def get_counted(root: str, counter: str) -> str:
     with td.use_root(root):
         return str(Counted.get({"counter": counter}).path)
+
+
+@td.record(name="SlowOwner")
+class SlowOwner:
+    """Its __init__ (the build) touches a marker and sleeps; a rerun on a done record skips that."""
+
+    def __init__(
+        self,
+        n: int = 1,
+        marker: Annotated[str, td.field(hashed=False)] = "",
+        sleep: Annotated[float, td.field(hashed=False)] = 0.0,
+    ):
+        self.resumed = "pid" in self.record
+        if not self.resumed:
+            Path(marker).touch()
+            time.sleep(sleep)
+            self.record.pid = os.getpid()
+
+
+def make_slow_owner(root: str, marker: str, sleep: float) -> tuple[bool, int, str]:
+    with td.use_root(root):
+        owner = SlowOwner(marker=marker, sleep=sleep)
+        return owner.resumed, owner.record.pid, owner.record.status
 
 
 def get_hangs(root: str, marker: str) -> None:

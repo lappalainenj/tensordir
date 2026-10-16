@@ -515,8 +515,11 @@ assert stacked.dims == ("network", "stimulus") and list(stacked["seed"].values) 
 ## Classes that own a record
 
 `@td.record` keeps your class as it is and adds a workspace record keyed by its `__init__`
-arguments (see [Design](design.md#classes-that-own-a-record) for the exact rules). Spec fields
-become attributes; assigning one moves later writes to the record for the new spec.
+arguments (see [Design](design.md#classes-that-own-a-record) for the exact rules). The first
+construction is the build: `__init__` runs under the record's lease (status `running`; other
+processes constructing the same spec wait), and the record is `done` when it returns. Methods
+keep writing to it afterwards. Spec fields become attributes; assigning one moves later writes
+to the record for the new spec.
 
 ```python
 # requires: torch safetensors
@@ -560,7 +563,9 @@ class Trainer:
 
 
 trainer = Trainer(verbose=True)
-first = trainer.train()
+assert trainer.record.status == "done"  # built by __init__
+first = trainer.train()  # writes after the build: still done, `modified` updated
+assert trainer.record.meta["modified"] is not None
 assert Trainer().train() == first  # same spec: reopened, not retrained
 
 trainer.lr = 3e-2  # a new spec: the next writes go to a new record

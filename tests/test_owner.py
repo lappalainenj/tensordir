@@ -1,6 +1,8 @@
 """`@td.record`: regular classes owning a workspace record keyed by their `__init__` arguments."""
 
+import multiprocessing
 import pickle
+import time
 from typing import Annotated, Any
 
 import numpy as np
@@ -8,6 +10,8 @@ import pytest
 from jaxtyping import Float
 
 import tensordir as td
+from tensordir import _record
+from _records import SlowOwner, make_slow_owner
 
 
 @td.record
@@ -49,17 +53,68 @@ def test_spec_from_init_arguments(root):
         Trainer(layers=object())  # spec values must have a canonical form
 
 
-def test_record_is_lazy_and_reopens(root):
+def test_record_is_built_by_init_and_reopens(root):
     trainer = Trainer()
-    assert Trainer.Record.lookup(trainer.spec) is None  # nothing on disk before first use
+    record = trainer.record
+    assert record.status == "done" and record.keys() == []  # built by __init__, nothing written
+    assert Trainer.Record.lookup(trainer.spec) == record
     trainer.step(3.0)
     trainer.step(2.0)
-    record = trainer.record
     assert record.status == "done" and record.spec == trainer.spec
     np.testing.assert_array_equal(record.load("loss"), [3.0, 2.0])
     again = Trainer(device="cuda")  # unhashed: same key
     assert again.record.key == record.key
     np.testing.assert_array_equal(again.record.load("loss"), [3.0, 2.0])
+
+
+def test_init_is_the_build(root, monkeypatch):
+    clock = iter(f"2026-01-01T00:00:{s:02d}+00:00" for s in range(60))
+    monkeypatch.setattr(_record, "_now", lambda: next(clock))
+    seen = []
+    plan = {"fail": True}
+
+    @td.record
+    class Probe:
+        def __init__(self, x: int = 0):
+            other = Probe.Record.locate(self.spec)  # a second handle, as another process sees it
+            seen.append((other.status, self.record.status, "x" in self.record))
+            if "x" not in self.record:
+                self.record.x = x  # inside the build: no `modified`
+            if plan["fail"]:
+                raise ValueError("bad x")
+
+    with pytest.raises(ValueError, match="bad x"):  # the caller's exception, not BuildFailed
+        Probe()
+    failed = Probe.Record.locate(Probe.Spec())
+    assert failed.status == "failed" and "bad x" in failed.error["traceback"]
+    plan["fail"] = False
+    probe = Probe()  # retried
+    record = probe.record
+    assert seen == [("running", "running", False), ("running", "running", False)]
+    assert record.status == "done" and record.x == 0 and record.meta["modified"] is None
+    record.y = 1  # after __init__: an edit, status unchanged
+    first = record.meta["modified"]
+    record.append("loss", [1.0])
+    assert record.status == "done" and first is not None and record.meta["modified"] > first
+    second = Probe()  # done: __init__ reruns without the lease, on the same record
+    assert seen[-1] == ("done", "done", True) and second.record == record
+
+
+def test_concurrent_construction_waits_for_the_build(root, tmp_path):
+    marker = tmp_path / "started"
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(2) as pool:
+        first = pool.apply_async(make_slow_owner, (str(root), str(marker), 3.0))
+        deadline = time.monotonic() + 60
+        while not marker.exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert SlowOwner.Record.locate(SlowOwner.Spec()).status == "running"
+        second = pool.apply_async(make_slow_owner, (str(root), str(tmp_path / "unused"), 0.0))
+        (resumed_a, pid_a, status_a), (resumed_b, pid_b, status_b) = first.get(60), second.get(60)
+    assert (resumed_a, resumed_b) == (False, True)  # the second waited, then reopened the build
+    assert pid_a == pid_b and status_a == status_b == "done"
+    assert not (tmp_path / "unused").exists()
 
 
 def test_changing_spec_attributes_switches_records(root):
