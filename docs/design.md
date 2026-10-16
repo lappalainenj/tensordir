@@ -389,6 +389,23 @@ external tables (`DeltaRef.to_table(filter=...)`) accept the pushdown-able subse
 `_meta.yaml`, single-dataset `.h5` arrays (opened with HDF5 file locking disabled), CSV files,
 other files and subdirectories. There are no import aliases for datamate's API.
 
+## Experimental features
+
+These features were added without an existing workload that needs them. Each stays until a real
+workload shows whether it is needed; until then its behaviour may change and it may be removed.
+
+| Feature | Where |
+|---|---|
+| `ParquetRef`, its listing digest and `SnapshotChanged` | External tables |
+| `TableRef.duckdb`, `TableRef.materialize`, `tensordir.external.expression` | External tables |
+| `td.any_of`, `td.exactly` | Collections and views |
+| `td.transient` in `@td.record` classes | Classes that own a record |
+| `StoreBackend` subclasses through `select_codec` and `skip_codecs` | joblib |
+| `Record.inputs`, `Record.lineage` | [Composing records](extending.md#composing-records) |
+
+`DeltaRef`, workspace records, `in_place` builds and the `.td` accessors are not experimental:
+each replaces something datamate, flyvis or another project already did.
+
 ## Known limitations
 
 - `bytes` arrays (`dtype="S"`) have no stable zarr v3 specification yet, and zarr warns about

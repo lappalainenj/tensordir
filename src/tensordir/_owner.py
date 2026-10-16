@@ -40,6 +40,7 @@ class _Transient:
 
 
 #: Mark an `__init__` argument as not part of the spec: `logger: Annotated[Logger, td.transient]`.
+#: Experimental: may change or be removed.
 transient = _Transient()
 
 

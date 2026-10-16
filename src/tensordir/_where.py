@@ -59,6 +59,8 @@ class Exactly:
 def any_of(*conditions: Any) -> AnyOf:
     """A condition met when any of `conditions` is: `seed=td.any_of(0, 1)`, `lr=td.any_of(0.1, ">1")`.
 
+    **Experimental:** may change or be removed; see Design, Experimental features.
+
     Unlike a bare list, it never matches a field equal to the whole sequence. Each item is a
     condition of the `where` grammar, except that list and tuple items are compared whole:
     `layers=td.any_of([8], [8, 16])` finds fields equal to `[8]` or to `[8, 16]`.
@@ -68,6 +70,8 @@ def any_of(*conditions: Any) -> AnyOf:
 
 def exactly(value: Any) -> Exactly:
     """A condition met only by values equal to `value`: `layers=td.exactly([8, 16])`.
+
+    **Experimental:** may change or be removed; see Design, Experimental features.
 
     Unlike a bare list, it never matches a single item; a string is compared as it is, without
     parsing comparisons such as `">0.1"`. Floats compare within a relative tolerance of 1e-9.

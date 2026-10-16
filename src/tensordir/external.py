@@ -37,7 +37,10 @@ __all__ = ["DeltaRef", "ParquetRef", "SnapshotChanged", "TableRef", "expression"
 
 
 class SnapshotChanged(TensordirError):
-    """A parquet directory no longer matches the version (listing digest) a reference pinned."""
+    """A parquet directory no longer matches the version (listing digest) a reference pinned.
+
+    **Experimental:** may change or be removed; see Design, Experimental features.
+    """
 
 
 def _require(module: str, what: str) -> Any:
@@ -53,6 +56,8 @@ def _uri(uri: str | os.PathLike) -> str:
 
 def expression(filter: Any) -> Any:
     """A pyarrow filter expression from an expression, None, or a mapping of column conditions.
+
+    **Experimental:** may change or be removed; see Design, Experimental features.
 
     Mapping values follow the pushdown-able part of `tensordir.where`: a value (equality, `None`
     for null), a list/tuple/set or `any_of(...)` of values (any of), `exactly(value)` for a
@@ -137,13 +142,18 @@ class TableRef:
         return pl.scan_pyarrow_dataset(self.dataset())
 
     def duckdb(self, connection: Any = None) -> Any:
-        """A duckdb relation over the snapshot; duckdb pushes down projections and filters."""
+        """A duckdb relation over the snapshot; duckdb pushes down projections and filters.
+
+        **Experimental:** may change or be removed; see Design, Experimental features.
+        """
         import duckdb
 
         return (connection or duckdb).from_arrow(self.dataset())
 
     def materialize(self, record: Any, name: str, *, columns: list[str] | None = None, filter: Any = None) -> None:
         """Copy the selected columns and rows into `record` as the parquet field `name`.
+
+        **Experimental:** may change or be removed; see Design, Experimental features.
 
         Streams batch by batch. Call it inside `build` (or on a workspace record); `record[name]`
         then opens a `pyarrow.dataset.Dataset`, `record.load(name)` a `pyarrow.Table`.
@@ -187,6 +197,8 @@ class DeltaRef(TableRef):
 @dataclasses.dataclass(frozen=True)
 class ParquetRef(TableRef):
     """A directory of parquet files (hive-partitioned or flat), pinned by a digest of its listing.
+
+    **Experimental:** may change or be removed; see Design, Experimental features.
 
     The version (the "digest") is a SHA-256 fingerprint of the directory's file listing: the
     sorted `(relative path, size in bytes)` pairs of its data files, written as JSON and hashed.

@@ -93,6 +93,8 @@ class StoreBackend(FileSystemStoreBackend):
         skip_codecs = frozenset({"json", "pickle"})  # numpy results as zarr, not joblib pickles
     ```
 
+    **Experimental:** subclassing through `select_codec` and `skip_codecs` may change or be removed.
+
     Backend option `lazy` (default True) opens results lazily where the codec can.
     """
 

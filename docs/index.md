@@ -55,6 +55,9 @@ therefore imports both libraries, about 0.45 s. Set `TENSORDIR_NO_ACCESSORS=1` t
 and use `df.pipe(td.where, ...)` instead of `df.td.where(...)`; see
 [Collections and views](design.md#collections-and-views).
 
+Features marked **experimental** may change or be removed; [Design](design.md#experimental-features)
+lists them.
+
 See the quickstart in the repository's `README.md`, the [example notebooks](examples/index.md),
 [migrating](migrating.md) from datamate, flyvis and another project, [extending](extending.md)
 tensordir and the [design](design.md).

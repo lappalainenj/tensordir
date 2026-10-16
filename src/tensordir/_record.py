@@ -565,6 +565,8 @@ class Record:
         """The keyword inputs this record was built from, by name: records reopened, arrays as
         their `Digest`, other values in canonical form.
 
+        **Experimental:** may change or be removed; see Design, Experimental features.
+
         An input record is reopened from the path stored at build time, else from its type's
         current root; if it is in neither place, the handle points at the stored path and its
         status is `absent`.
@@ -574,7 +576,10 @@ class Record:
 
     def lineage(self) -> list["Record"]:
         """Every record this one was built from, as an input or a spec field, directly or through
-        other records: each once, upstream records before the records built from them."""
+        other records: each once, upstream records before the records built from them.
+
+        **Experimental:** may change or be removed; see Design, Experimental features.
+        """
         order: list[Record] = []
         seen: set[str] = set()
 
