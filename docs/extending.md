@@ -8,7 +8,7 @@ packages (named in the `# requires:` line) are missing.
 |---|---|
 | store a new type of value in a record | a `Codec` passed to `register_codec` |
 | name array axes that the default rule gets wrong | `register_dims`, a record's `dims`, `Dims` |
-| build a record from other records or arrays | keyword inputs to `Record.get` and `build` |
+| build a record from other records or arrays | inputs to `Record.get`, or nested specs |
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
 | let an existing class fill a record over time | `@td.record`, or a `mutable = True` record |
 | depend on a Delta table or parquet directory outside the root | `td.DeltaRef`, `td.ParquetRef` |
@@ -361,11 +361,37 @@ assert retina.to_xarray("frame_edges").dims == ("time_edge",)
 assert retina.to_xarray("coupling").dims == ("pre", "post")
 ```
 
-## Records built from other records
+## Composing records
 
-Keyword arguments to `get` beyond the spec are inputs: they reach `build` and enter the key.
-Records enter by type and key, arrays by digest, other values by canonical form. A record that
-depends on another record therefore gets a new key when its input does.
+A record can depend on other records in two ways. **Inputs** pass finished records to `get` as
+keyword arguments; `build` receives them, and each enters the key by its type and key.
+**Nested specs** put the upstream record's spec inside the downstream spec; `build` gets or
+builds the upstream record itself, and the upstream spec fields enter the key. Either way, a
+change upstream gives the downstream record a new key, at any depth.
+
+| | inputs | nested specs |
+|---|---|---|
+| upstream enters the key as | its key (opaque) | its hashed spec fields |
+| query by upstream settings | no: filter the upstream type, then `get` with its records | `Cluster.query(points__seed=1)` |
+| upstream may itself take arrays or records as inputs | yes | no: it must be buildable from its spec alone |
+| who builds the upstream record | the caller, before `get` | `build`, on demand |
+| navigate from a finished record | `record.inputs`, `record.lineage()` | `record.spec.points`, then `Points.get(...)` |
+
+Use nested specs when the upstream record is cheap to describe by its settings and you want to
+query by them; use inputs when the upstream record has inputs of its own, is built elsewhere,
+or should stay a separate unit of work. A spec field may also hold a record (`points: Points`):
+it enters the key like an input, is stored with its path and reopens as a record from
+`_record.json`.
+
+### Inputs
+
+Keyword arguments to `get` beyond the spec are inputs: records enter by type and key, arrays by
+digest, other values by canonical form. `_record.json` also stores the path of each input record,
+so a finished record can reopen its inputs (`record.inputs`) and walk its whole upstream graph
+(`record.lineage()`, each record once, upstream first). An input record that is no longer at its
+stored path is looked up under its type's current root, so a copied root keeps its links once
+it is the root in use; a deleted one reopens as an `absent` handle. `get` refuses to build when
+an input record (or a record in a spec field) is not `done`, and names it.
 
 ```python
 import numpy as np
@@ -409,6 +435,16 @@ class Cluster(td.Record):
         self.centres, self.labels = centres, labels
 
 
+class Score(td.Record):
+    __record_name__ = "Score"
+
+    inertia: float
+
+    def build(self, spec, cluster: Cluster, points: Points):
+        d = points.xy - cluster.centres[cluster.labels]
+        self.inertia = float((d**2).sum())
+
+
 points = Points.get()
 fit = Cluster.get(Cluster.Spec(n_clusters=3), points=points)  # builds
 assert Cluster.get({"n_clusters": 3}, points=Points.get()).key == fit.key  # reopens
@@ -417,6 +453,105 @@ weighted = Cluster.get({"n_clusters": 3}, points=points, weights=np.linspace(0.5
 assert weighted.key != fit.key  # the array entered the key by digest
 assert fit.meta["inputs"]["points"] == {"__record__": "Points", "key": points.key}
 assert Cluster.lookup({"n_clusters": 3}, points=Points.locate({"seed": 1})) is None  # never built
+
+score = Score.get(cluster=fit, points=points)
+assert score.inputs["cluster"] == fit and score.inputs["cluster"].centres.shape == (3, 2)
+assert weighted.inputs["weights"] == td.Digest.of(np.linspace(0.5, 1.5, 300))
+assert score.lineage() == [points, fit]  # points is reached twice, listed once
+
+try:
+    Score.get(cluster=fit, points=Points.locate({"seed": 1}))
+except ValueError as error:
+    assert "input 'points'" in str(error) and "absent" in str(error)
+```
+
+### Nested specs
+
+A field annotated with a spec class holds that spec; a dict given for it is turned into one.
+`build` calls `get` on the upstream type with the nested spec, which reopens or builds it.
+
+```python
+import numpy as np
+from jaxtyping import Float
+
+import tensordir as td
+
+td.set_root("results")
+
+
+class Points(td.Record):
+    __record_name__ = "Points"
+
+    class Spec(td.Spec):
+        n_points: int = 300
+        seed: int = 0
+
+    xy: Float[np.ndarray, "n_points n_dims"]
+
+    def build(self, spec):
+        self.xy = np.random.default_rng(spec.seed).normal(size=(spec.n_points, 2))
+
+
+class Spread(td.Record):
+    __record_name__ = "Spread"
+
+    class Spec(td.Spec):
+        points: Points.Spec = Points.Spec()
+        quantile: float = 0.9
+
+    radius: float
+
+    def build(self, spec):
+        xy = Points.get(spec.points).xy
+        self.radius = float(np.quantile(np.linalg.norm(xy, axis=1), spec.quantile))
+
+
+for seed in (0, 1):
+    Spread.get({"points": {"seed": seed}})  # the dict becomes a Points.Spec
+
+spread = Spread.get(Spread.Spec(points=Points.Spec(seed=1)))
+assert isinstance(spread.spec.points, Points.Spec) and spread.spec.points.seed == 1
+assert len(Spread.query(points__seed=1)) == 1  # queryable by upstream fields
+assert Points.lookup(spread.spec.points) is not None  # the upstream record, from the spec
+assert spread.lineage() == []  # records a build gets itself are not recorded
+```
+
+### Workspace records as inputs
+
+A workspace record (`mutable = True`) can change after records were built from it. Its canonical
+form therefore adds the time of its last edit, `modified`: each edit gives records built from it
+a new key, so `get` builds afresh instead of returning a result computed from the old contents,
+and the old result stays under its old key. The time is read when the key is computed; an edit
+made while a downstream build runs is not noticed. The same holds for a workspace record in a
+spec field or passed to a `cached_method`.
+
+```python
+import numpy as np
+
+import tensordir as td
+
+td.set_root("results")
+
+
+class Losses(td.Record):
+    __record_name__ = "Losses"
+    mutable = True
+
+
+class Best(td.Record):
+    __record_name__ = "Best"
+
+    loss: float
+
+    def build(self, spec, losses: Losses):
+        self.loss = float(losses.load("loss").min())
+
+
+losses = Losses.get()
+losses.append("loss", np.array([3.0, 2.0]))
+assert Best.get(losses=losses).loss == 2.0
+losses.append("loss", np.array([1.0]))
+assert Best.get(losses=losses).loss == 1.0  # a new key, built from the new contents
 ```
 
 ## Views that rebuild domain objects

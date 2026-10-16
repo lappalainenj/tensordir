@@ -16,7 +16,10 @@ A record's key is the sha256 of the canonical JSON of
   maps -0.0 to 0.0, tags infinities, rejects NaN, and accepts arrays only through `Digest`. A float
   field given an int is stored as a float, so `lr=1` and `lr=1.0` share a key.
 - `inputs` are the keyword arguments of `get` beyond the spec. Records enter by type and key,
-  arrays by digest, and other values by canonical form.
+  arrays by digest, and other values by canonical form. A workspace record also enters with the
+  time of its last edit (see [Workspace records as inputs](extending.md#workspace-records-as-inputs)).
+  Paths never enter the key; `_record.json` stores the path of every input record under
+  `upstream`, and a record in a spec field with its path, so both can be reopened.
 
 Spec class names don't enter the key, so renaming a spec class is free. Two field options
 control the key:
