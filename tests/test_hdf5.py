@@ -24,7 +24,8 @@ class Responses(td.Record):
     def build(self, spec):
         self.rates = np.arange(spec.n_cells * spec.n_frames, dtype=float).reshape(spec.n_cells, spec.n_frames)
         self.gains = np.ones(spec.n_cells)
-        self.append("loss", [1.0, 0.5])  # append stays zarr
+        self.append("loss", [1.0, 0.5])  # appends follow the record's codecs too
+        self.append("loss", [0.25])
         self["summary"] = {"ok": True}  # other codecs unaffected
 
 
@@ -32,7 +33,8 @@ def test_record_codec_override(root):
     record = Responses.get()
     fields = record.meta["fields"]
     assert fields["rates"]["codec"] == "hdf5" and fields["rates"]["dims"] == ["cell", "frame"]
-    assert fields["loss"]["codec"] == "ndarray" and fields["summary"]["codec"] == "json"
+    assert fields["loss"]["codec"] == "hdf5" and fields["loss"]["append"] and fields["summary"]["codec"] == "json"
+    np.testing.assert_array_equal(record.loss, [1.0, 0.5, 0.25])
     assert (record.path / "rates.h5").is_file()
     rates = record.rates
     assert isinstance(rates, np.ndarray) and rates.shape == (4, 3)
@@ -79,3 +81,54 @@ def test_per_field_choice_and_size_checks(root):
                 self.write("a", np.array([object()]), codec="hdf5")
 
         Objects.get()
+
+
+class Log(td.Record):
+    __record_name__ = "Hdf5Log"
+    mutable = True
+    codecs = {"ndarray": "hdf5"}
+
+    class Spec(td.Spec):
+        run: int = 0
+
+    loss: Float[np.ndarray, "n_steps"]
+
+
+def test_append_extends_a_resizable_dataset(root):
+    record = Log.get()
+    record.append("loss", [1.0, 0.5], chunk=4)
+    record.append("loss", np.float64(0.25))  # a scalar is one row
+    reopened = td.Record.at(record.path)  # another handle, after reopening
+    reopened.append("loss", [0.125, 0.0625])
+    np.testing.assert_array_equal(record.load("loss"), [1.0, 0.5, 0.25, 0.125, 0.0625])
+    info = reopened.meta["fields"]["loss"]
+    assert info["codec"] == "hdf5" and info["shape"] == [5] and info["dims"] == ["step"] and info["append"]
+    with h5py.File(record.path / "loss.h5", "r", locking=False) as f:
+        data = f["data"]
+        assert data.maxshape == (None,) and data.chunks == (4,) and data.dims[0].label == "step"
+    record.loss = np.array([9.0])  # overwriting keeps it appendable, as with zarr
+    record.append("loss", [8])  # ints are cast to the stored dtype
+    np.testing.assert_array_equal(record.loss, [9.0, 8.0])
+    assert record.meta["fields"]["loss"]["codec"] == "hdf5"
+    record.append("grid", np.zeros((2, 3)), codec="ndarray")  # per call: zarr
+    record.append("grid", np.ones((1, 3)))  # later appends keep the field's codec
+    assert record.meta["fields"]["grid"]["codec"] == "ndarray" and record.load("grid").shape == (3, 3)
+
+
+@pytest.mark.parametrize("codec", ["ndarray", "hdf5"])
+def test_append_errors_match_between_codecs(root, codec):
+    record = Log.get({"run": 1})
+    record.append("rows", np.zeros((2, 3)), codec=codec)
+    with pytest.raises(ValueError, match="cannot append rows of shape"):
+        record.append("rows", np.zeros((1, 4)))
+    with pytest.raises(td.DimsError):
+        record.append("fresh", np.zeros((2, 3)), dims=("x",), codec=codec)
+    record.write("fixed", np.zeros(3), codec=codec)
+    with pytest.raises(ValueError, match="append\\(\\) needs a field created by append\\(\\)"):
+        record.append("fixed", [1.0])
+    other = "hdf5" if codec == "ndarray" else "ndarray"
+    with pytest.raises(ValueError, match="appended with codec"):
+        record.append("rows", np.zeros((1, 3)), codec=other)
+    with pytest.raises(TypeError, match="cannot append"):
+        record.append("notes", [1], codec="json")
+    assert record.load("rows").shape == (2, 3) and "fresh" not in record and "notes" not in record

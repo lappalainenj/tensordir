@@ -228,11 +228,15 @@ default because HDF5 trades away what matters on clusters:
 - **File locking.** HDF5 locks files with `flock`/`fcntl`, which is unreliable or disabled on
   NFS and Lustre and can hang or fail readers. tensordir opens files with `locking=False`; other
   tools may need `HDF5_USE_FILE_LOCKING=FALSE`.
-- **Single writer.** One process writes a file at a time, and every write rewrites the whole
+- **Single writer.** One process writes a file at a time, and every `write` rewrites the whole
   file (atomically, by rename). Zarr writes each chunk as its own object.
 - **No chunk-parallel writes.** Many workers cannot fill one HDF5 array concurrently; with zarr
   they can write disjoint chunks.
-- **No appends.** `append` always creates zarr arrays, also under `codecs = {"ndarray": "hdf5"}`.
+- **Appends in place.** Under `codecs = {"ndarray": "hdf5"}` (or `append(..., codec="hdf5")`),
+  `append` creates a chunked dataset with `maxshape=(None, ...)` and resizes it along axis 0,
+  datamate's `extend`. The contract matches zarr appends: rows must match the trailing shape,
+  values are cast to the stored dtype, and a field written with `write` cannot be appended to.
+  The file is modified in place, so a reader can see a partly appended tail.
 - **Open handles.** `record["x"]` (and `record.x` for fields not typed as numpy arrays) returns
   an `h5py.Dataset` whose file stays open until the handle is dropped; `record.load("x")` and
   typed numpy fields read into memory and close the file.

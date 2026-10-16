@@ -82,6 +82,13 @@ class Codec:
     def delete(self, directory: Path, name: str, info: dict) -> None:
         raise NotImplementedError
 
+    def append(
+        self, directory: Path, name: str, values: Any, *, dims: Sequence[str] | None = None, chunk: int = 1024
+    ) -> dict:
+        """Append rows along axis 0 of field `name`, creating it on first use; returns its info
+        with `"append": True`. Only array codecs implement it."""
+        raise TypeError(f"codec {self.name!r} cannot append")
+
 
 class FileCodec(Codec):
     """A codec storing one file `<name><suffix>` next to `_record.json`."""
@@ -118,6 +125,23 @@ class NdarrayCodec(Codec):
     def delete(self, directory, name, info):
         _delete_member(directory, name)
 
+    def append(self, directory, name, values, *, dims=None, chunk=1024):
+        return append_array(directory, name, values, dims=dims, chunk=chunk)
+
+
+def _rows(name: str, values: Any, dims: Sequence[str] | None) -> np.ndarray:
+    values = np.asarray(values)
+    if values.ndim == 0:
+        values = values[None]
+    if dims is not None and len(dims) != values.ndim:
+        raise DimsError(f"{name}: appending {values.ndim}-d values with dims {tuple(dims)}")
+    return values
+
+
+def _check_rows(name: str, values: np.ndarray, shape: tuple[int, ...]) -> None:
+    if tuple(shape[1:]) != values.shape[1:]:
+        raise ValueError(f"{name}: cannot append rows of shape {values.shape[1:]} to {tuple(shape)}")
+
 
 def append_array(
     directory: Path, name: str, values: Any, *, dims: Sequence[str] | None = None, chunk: int = 1024
@@ -126,11 +150,7 @@ def append_array(
 
     Readers may briefly see fill values at the tail while a resize is in flight.
     """
-    values = np.asarray(values)
-    if values.ndim == 0:
-        values = values[None]
-    if dims is not None and len(dims) != values.ndim:
-        raise DimsError(f"{name}: appending {values.ndim}-d values with dims {tuple(dims)}")
+    values = _rows(name, values, dims)
     group = _group(directory)
     if name not in group:
         array = group.create_array(
@@ -143,8 +163,7 @@ def append_array(
         array[...] = values
     else:
         array = group[name]
-        if array.shape[1:] != values.shape[1:]:
-            raise ValueError(f"{name}: cannot append rows of shape {values.shape[1:]} to {array.shape}")
+        _check_rows(name, values, array.shape)
         n = array.shape[0]
         array.resize((n + len(values), *array.shape[1:]))
         array[n:] = values.astype(array.dtype, copy=False)
@@ -347,10 +366,13 @@ class Hdf5Codec(FileCodec):
     dimension labels, for h5-based tools. Choose it per field (`write(..., codec="hdf5")`) or per
     record type (`codecs = {"ndarray": "hdf5"}`); zarr stays the default.
 
+    `append` creates a chunked dataset with `maxshape=(None, ...)` and resizes it along axis 0
+    (datamate's `extend`), with the checks of zarr appends.
+
     Trade-offs against zarr: HDF5 file locking misbehaves on NFS and Lustre (tensordir opens
     files with `locking=False`; other readers may need `HDF5_USE_FILE_LOCKING=FALSE`); a file has
-    a single writer and each write rewrites the whole file; chunks cannot be written in parallel;
-    `append` stays zarr; and a lazy read keeps the file open until the handle is dropped.
+    a single writer and each `write` rewrites the whole file; chunks cannot be written in
+    parallel; and a lazy read keeps the file open until the handle is dropped.
     """
 
     name = "hdf5"
@@ -379,6 +401,35 @@ class Hdf5Codec(FileCodec):
             return f["data"]
         with f:
             return f["data"][()]
+
+    def append(self, directory, name, values, *, dims=None, chunk=1024):
+        import h5py
+
+        values = _rows(name, values, dims)
+        if values.dtype.hasobject:
+            raise TypeError(f"{name}: object arrays have no HDF5 form")
+        path = self.path(directory, name)
+        if not path.exists():
+            with atomic_path(path) as tmp:
+                with h5py.File(tmp, "w", locking=False) as f:
+                    dataset = f.create_dataset(
+                        "data",
+                        data=values,
+                        maxshape=(None, *values.shape[1:]),
+                        chunks=(chunk, *(max(s, 1) for s in values.shape[1:])),
+                    )
+                    for axis, label in enumerate(dims or ()):
+                        dataset.dims[axis].label = label
+            shape, dtype = values.shape, values.dtype
+        else:
+            with h5py.File(path, "a", locking=False) as f:
+                dataset = f["data"]
+                _check_rows(name, values, dataset.shape)
+                n = dataset.shape[0]
+                dataset.resize(n + len(values), axis=0)
+                dataset[n:] = values.astype(dataset.dtype, copy=False)
+                shape, dtype = dataset.shape, dataset.dtype
+        return {"dims": list(dims) if dims else None, "shape": list(shape), "dtype": dtype.str, "append": True}
 
 
 _CODECS: dict[str, Codec] = {}

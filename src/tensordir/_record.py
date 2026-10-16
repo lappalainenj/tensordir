@@ -21,7 +21,7 @@ from . import _provenance
 from ._canonical import canonical, sha256
 from ._lease import Lease, lease_state
 from ._root import get_root
-from .codecs import append_array, atomic_path, codec_for, get_codec, remove_tree
+from .codecs import atomic_path, codec_for, get_codec, remove_tree
 from .dims import dims_for
 from .errors import BuildFailed, DimsError, KeyCollision, ReadOnlyError, RecordBusy
 from .spec import Spec as _Spec
@@ -139,8 +139,8 @@ class Record:
     #: but no longer guarantees the contents. Without a `build`, `get` creates an empty record.
     mutable: ClassVar[bool] = False
     #: Codec replacements for values written without `codec=`, by the name of the codec that
-    #: would be chosen: `{"ndarray": "hdf5"}` stores arrays as HDF5 files instead of zarr (see
-    #: `tensordir.codecs.Hdf5Codec` for the trade-offs). `append` always uses zarr.
+    #: would be chosen: `{"ndarray": "hdf5"}` stores arrays, including `append`ed ones, as HDF5
+    #: files instead of zarr (see `tensordir.codecs.Hdf5Codec` for the trade-offs).
     codecs: ClassVar[Mapping[str, str]] = {}
 
     Spec: ClassVar[type[_Spec]] = _EmptySpec
@@ -678,19 +678,32 @@ class Record:
             chosen = get_codec(type(self).codecs[chosen.name])
         with self._edit() as fields:
             old = fields.get(name)
-            if old is not None and old.get("append") and codec is None and chosen.name == "ndarray":
-                get_codec("ndarray").delete(self._dir, name, old)
-                fields[name] = {"codec": "ndarray", **append_array(self._dir, name, value, dims=dims)}
+            if old is not None and old.get("append") and codec is None and chosen.name == old["codec"]:
+                chosen.delete(self._dir, name, old)
+                fields[name] = {"codec": chosen.name, **chosen.append(self._dir, name, value, dims=dims)}
                 return
             if old is not None and old["codec"] != chosen.name:
                 get_codec(old["codec"]).delete(self._dir, name, old)
             info = chosen.write(self._dir, name, value, dims=dims)
             fields[name] = {"codec": chosen.name, **info}
 
-    def append(self, name: str, values: Any, *, dims: tuple[str, ...] | None = None, chunk: int = 1024) -> None:
+    def append(
+        self,
+        name: str,
+        values: Any,
+        *,
+        dims: tuple[str, ...] | None = None,
+        chunk: int = 1024,
+        codec: str | None = None,
+    ) -> None:
         """Append rows (axis 0) to array field `name`, creating it on first use. With `in_place`
         records, readers see appended rows while the build runs (training logs); workspace records
-        accept appends after the build too."""
+        accept appends after the build too.
+
+        A new field uses `codec`, else the record's `codecs["ndarray"]`, else zarr (`ndarray`);
+        later appends keep the field's codec. Rows must match the trailing shape and are cast to
+        the stored dtype.
+        """
         _validate_name(name)
         annotation = type(self)._typed_fields().get(name)
         if dims is None and annotation is not None:
@@ -699,7 +712,10 @@ class Record:
             old = fields.get(name)
             if old is not None and not old.get("append"):
                 raise ValueError(f"{name!r} was written with write(); append() needs a field created by append()")
-            fields[name] = {"codec": "ndarray", **append_array(self._dir, name, values, dims=dims, chunk=chunk)}
+            if old is not None and codec is not None and codec != old["codec"]:
+                raise ValueError(f"{name!r} is appended with codec {old['codec']!r}, not {codec!r}")
+            chosen = get_codec(old["codec"] if old is not None else codec or type(self).codecs.get("ndarray", "ndarray"))
+            fields[name] = {"codec": chosen.name, **chosen.append(self._dir, name, values, dims=dims, chunk=chunk)}
 
     def delete_field(self, name: str) -> None:
         """Remove field `name` (inside `build`, or on a workspace record); also `del record.name`."""

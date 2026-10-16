@@ -42,7 +42,7 @@ spec or inputs.
 | | sub-directories (`connectome.nodes.type[:]`) | one DataFrame (`parquet`) or `xarray.Dataset`/`DataTree` field |
 | | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `build`; `record.nodes` is the DataFrame |
 | **Labeled arrays** | shapes in docstrings, `xarray` built by hand | jaxtyping annotations store dims; `record.to_xarray("x")`, `xr.open_zarr(record.path / "data.zarr")` |
-| **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `build`; `in_place = True` to let readers watch |
+| **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `build` (zarr; HDF5 under `codecs = {"ndarray": "hdf5"}`); `in_place = True` to let readers watch |
 | | `self.dir.loss = losses`, `self.dir.extend(...)` from a `Solver` | `self.record.loss = losses`, `self.record.append(...)` on a workspace record |
 | | `del dir.x`, `dir.rmtree("x")` | `del record.x` (in `build` or on a workspace record) |
 | | checkpoints `chkpts/chkpt_00010` + `extend("chkpt_index", ...)` | `self[f"chkpt_{i:05d}"] = model` + `self.append("chkpt_step", [i])` |
