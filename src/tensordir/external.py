@@ -188,10 +188,18 @@ class DeltaRef(TableRef):
 class ParquetRef(TableRef):
     """A directory of parquet files (hive-partitioned or flat), pinned by a digest of its listing.
 
-    The version is the sha256 of the sorted `(relative path, size)` pairs of its data files (names
-    starting with `.` or `_` are skipped, as pyarrow does). `version=None` computes it on creation;
-    opening the data recomputes it and raises `SnapshotChanged` if files were added, removed or
-    resized. Rewriting a file with the same size goes unnoticed.
+    The version (the "digest") is a SHA-256 fingerprint of the directory's file listing: the
+    sorted `(relative path, size in bytes)` pairs of its data files, written as JSON and hashed.
+    Names starting with `.` or `_` are skipped, as pyarrow does. The file contents are not read.
+    `version=None` computes it on creation.
+
+    The version is part of the reference's canonical form, so it is stored in the spec of a record
+    that uses the reference and enters that record's key: once files are added, removed or
+    resized, a new `ParquetRef(path)` has a new version and gives new keys, while records built
+    from the old listing keep their keys. Opening the data (`dataset()`, `to_table()`, ...)
+    recomputes the digest and raises `SnapshotChanged` if it differs from the pinned version.
+    A file rewritten with the same size and name goes unnoticed. `DeltaRef` pins a Delta table
+    version instead, which Delta keeps readable until it is vacuumed.
     """
 
     kind: ClassVar[str] = "parquet"

@@ -672,7 +672,11 @@ print(Edges.query().table(sizes=False)[["key", "spec.synapses", "spec.min_size"]
 On GCS, pass credentials for reading only:
 `td.DeltaRef("gs://bucket/path", version=3, storage_options={"google_service_account_path": ...})`.
 They stay out of keys and `_record.json`. For a directory of parquet files, use
-`td.ParquetRef(path)`; its version is a digest of the file listing.
+`td.ParquetRef(path)`. Its version is a digest: a SHA-256 fingerprint of the sorted list of
+`(relative path, size)` pairs of the data files. The digest is stored in the spec of each record
+that uses the reference, so a changed directory gives new keys, and opening a reference whose
+directory has changed since it was pinned raises `td.SnapshotChanged`. A file rewritten with the
+same name and size is not detected; a `DeltaRef` pins the Delta table version instead.
 
 ## joblib store backend
 

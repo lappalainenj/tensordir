@@ -250,9 +250,20 @@ exports, Delta Lake tables on GCS, through `deltalake` and duckdb. `td.DeltaRef`
 | | `DeltaRef(uri, version=None, storage_options=None)` | `ParquetRef(uri, version=None)` |
 |---|---|---|
 | table | a Delta Lake table (local, `gs://`, `s3://`, ...) | a directory of parquet files, flat or hive-partitioned |
-| version | the Delta version; `None` pins the current one when the reference is created | sha256 of the sorted `(path, size)` listing; `None` computes it |
+| version | the Delta version; `None` pins the current one when the reference is created | the listing digest (below); `None` computes it |
 | canonical form | `{"__delta__": uri, "version": n}` | `{"__parquet__": uri, "version": digest}` |
 | drift | Delta keeps old versions until they are vacuumed | reading re-lists the files and raises `SnapshotChanged` on a mismatch |
+
+**The parquet digest.** A parquet directory has no version number, so `ParquetRef` fingerprints
+its file listing: it lists the data files (skipping names that start with `.` or `_`, as
+pyarrow does), sorts the `(relative path, size in bytes)` pairs, and takes the SHA-256 of their
+JSON form. File contents are not read. The digest is the reference's version, so it is stored in
+the spec of every record that uses the reference and enters that record's key. Adding,
+removing, renaming or resizing a file gives a new `ParquetRef(path)` a new digest and so new
+keys; opening an old reference to the changed directory recomputes the digest and raises
+`SnapshotChanged` instead of reading different data. A file rewritten with the same name and
+size keeps the digest and is not detected. A `DeltaRef` does not need a fingerprint: it pins the
+Delta table version, which Delta can still read until it is vacuumed.
 
 - A reference can be a spec field (typed `td.DeltaRef`) or a `get` input. Its identity is the URI
   and version, so a new table version gives new keys, and old records stay valid for the old
@@ -264,7 +275,8 @@ exports, Delta Lake tables on GCS, through `deltalake` and duckdb. `td.DeltaRef`
   `to_batches`, `to_reader` and `scanner` take `columns=` and `filter=`, and `duckdb()` and
   `to_polars()` hand the dataset to those engines, which push down their own projections and
   filters. `filter` is a pyarrow expression or a mapping in the pushdown-able part of the
-  `where` grammar: a value, `None` (null), a list (any of), or comparisons like `">=2, <8"`.
+  `where` grammar: a value, `None` (null), a list or `td.any_of` of values (any of),
+  `td.exactly` of a scalar, or comparisons like `">=2, <8"`.
 - `ref.materialize(record, name, columns=, filter=)` streams a selection into a record as an
   `arrow` field. Use it when a build needs a stable local copy, or when the source may be
   vacuumed.
