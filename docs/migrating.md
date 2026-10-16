@@ -154,7 +154,7 @@ class Solver:
         self.record.append("chkpt_index", [index])
         self.record.best_chkpt_index = index
 
-solver = Solver(NetworkSpec(), TaskSpec())          # reopens the run if it exists
+solver = Solver(NetworkSpec(), TaskSpec())          # __init__ builds the run, or reruns on it
 Solver.Record.query(n_iters=250_000)                # every run, by spec
 ```
 
