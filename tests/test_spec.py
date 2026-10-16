@@ -133,6 +133,7 @@ def test_pickle_is_canonical_and_lossless():
 GOLDEN = {
     "v1": "11d0a8967009cbcdf468f09e5b09e73e7119b528c35a0e0b23f2ae052786b8fa",  # sha256(b'{"n":5}')
     "outer": "232b6a2ba1e3b65fdcb933e975a178c52c7e4cf42565ff068e7f11bd74007aec",
+    "nested": "f832900444f5348c6766f689e61fc961f6be769a0dcc07fa9355586c7dd68b2c",
 }
 
 
@@ -140,5 +141,7 @@ def test_golden_spec_keys():
     keys = {
         "v1": V1(n=5).key(),
         "outer": Outer(n=3, weights=td.Digest.of(np.arange(6, dtype="<i8").reshape(2, 3))).key(),
+        "nested": Outer(n=5, inner={"width": 8}).key(),  # a partial dict, defaults filled in
     }
     assert keys == GOLDEN
+    assert Outer(n=5, inner=Inner(width=8, scale=1.0)).key() == GOLDEN["nested"]
