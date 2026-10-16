@@ -94,6 +94,16 @@ class, and those of tensordir's own repository when it is installed from a check
 An exception in `build` stores a `failed` record with the traceback; while `retry_failed=True`
 rebuilds it, its status is `running`. `KeyboardInterrupt` and `SystemExit` leave no record behind.
 
+A build that is killed outright (SIGKILL, an out-of-memory kill, a lost node) leaves no record
+either. What it wrote stays in `.tensordir/tmp/`, and its lease turns `stale` once its heartbeat
+is older than `lease_ttl`; the next `get` of the same key breaks the lease and builds again.
+`tensordir gc` removes the leftovers: temporary directories without a live lease, stale leases,
+and trash. Run it after a job array with killed tasks, and in particular after changing the spec
+in response, because the old keys will not be asked for again and nothing else removes their
+temporary directories. `tensordir --root <root> gc --dry-run` lists what it would remove. An `in_place` build is
+the exception: it was writing in the final directory, which stays as a `stale` record until the
+next `get` resumes it.
+
 `in_place = True` builds in the final directory, so readers see fields and `append`ed rows while
 the build runs (training logs). A rebuild after a crash keeps what the earlier attempt wrote,
 which lets a recipe resume from checkpoints.

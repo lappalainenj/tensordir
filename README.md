@@ -62,6 +62,7 @@ class Fit(td.Record):
 points = np.random.default_rng(0).normal(size=(500, 2))
 fit = Fit.get(Fit.Spec(n_columns=8), points=points)  # builds; the array input is hashed by digest
 fit = Fit.get({"n_columns": 8}, points=points)       # reopens the same record
+assert Fit.lookup({"n_columns": 9}, points=points) is None  # reopen only: lookup never builds
 print(fit.path.relative_to(td.get_root()), fit.status, fit.centres.shape)
 
 print(Fit.query(n_columns=8).table(depth=1, sizes=False)[["key", "status", "spec.seed"]])

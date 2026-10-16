@@ -10,6 +10,7 @@ packages (named in the `# requires:` line) are missing.
 | name array axes that the default rule gets wrong | `register_dims`, a record's `dims`, `Dims` |
 | build a record from other records or arrays | inputs to `Record.get`, or nested specs |
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
+| store event tables larger than memory | a `pyarrow.RecordBatchReader` field, read as a dataset |
 | let an existing class fill a record over time | `@td.record`, or a `mutable = True` record |
 | depend on a Delta table or parquet directory outside the root | `td.DeltaRef`, `td.ParquetRef` |
 | change how joblib stores cached results | a registered `Codec`, or a `td.StoreBackend` subclass |
@@ -316,6 +317,56 @@ record = Responses.get()
 quantized, exact = record.load("quantized"), record.load("exact")
 assert quantized.voltage.encoding["dtype"] == np.int16
 assert float(abs(quantized.voltage - exact.voltage).max()) <= 0.5e-3 + 1e-12
+```
+
+### Event tables
+
+Spike times, synapse lists and other event data can have far more rows than fit in memory. A
+`pandas.DataFrame` field is written and read whole, so use the arrow codec instead: assign a
+`pyarrow.RecordBatchReader` and it is written to parquet batch by batch, so `build` never holds
+all rows. `record[name]` then opens a `pyarrow.dataset.Dataset` that reads only the columns you
+select, and skips row groups whose statistics rule out your filter. Each batch becomes at least
+one row group, so write batches in the order you will filter by, here time. For a job array, make
+one record per shard by putting the shard in the spec.
+
+```python
+# requires: pyarrow
+import numpy as np
+import pyarrow as pa
+import pyarrow.compute as pc
+
+import tensordir as td
+
+td.set_root("results")
+
+SCHEMA = pa.schema([("time", pa.float64()), ("unit", pa.int32())])
+
+
+class Spikes(td.Record):
+    __record_name__ = "Spikes"
+
+    class Spec(td.Spec):
+        n_units: int = 1000
+        n_seconds: int = 20
+        seed: int = 0
+
+    def build(self, spec):
+        rng = np.random.default_rng(spec.seed)
+
+        def seconds():  # one simulated second per batch, in time order
+            for second in range(spec.n_seconds):
+                n = rng.poisson(5 * spec.n_units)
+                times = second + np.sort(rng.random(n))
+                units = rng.integers(0, spec.n_units, n, dtype=np.int32)
+                yield pa.record_batch([times, units], schema=SCHEMA)
+
+        self["spikes"] = pa.RecordBatchReader.from_batches(SCHEMA, seconds())
+
+
+spikes = Spikes.get()["spikes"]  # a pyarrow dataset; no rows read yet
+window = spikes.to_table(columns=["unit"], filter=(pc.field("time") >= 2.0) & (pc.field("time") < 3.0))
+rates = np.bincount(window["unit"].to_numpy(), minlength=1000)  # spikes per unit in [2, 3) s
+assert rates.sum() == window.num_rows < spikes.count_rows()
 ```
 
 ## Dimension names
