@@ -97,6 +97,13 @@ def test_int_given_for_float_field_hashes_like_float():
     assert Outer(n=1, lr=np.float32(0.5)).key() == Outer(n=1, lr=0.5).key()
 
 
+def test_dict_given_for_nested_spec_field_becomes_the_spec():
+    outer = Outer(n=1, inner={"width": 8})
+    assert isinstance(outer.inner, Inner) and outer.inner.width == 8 and outer.inner.scale == 1.0
+    assert outer == Outer(n=1, inner=Inner(width=8))
+    assert Outer(n=1).replace(inner={"width": 8}) == outer
+
+
 def test_invalid_values_fail_at_construction():
     with pytest.raises(td.CanonicalizationError, match="NaN"):
         Outer(n=1, lr=float("nan"))

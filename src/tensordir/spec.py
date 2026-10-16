@@ -4,6 +4,7 @@ import dataclasses
 import importlib
 import types
 import typing
+from collections.abc import Mapping
 from enum import Enum
 from pathlib import PurePath
 from typing import Any, ClassVar, Self
@@ -83,6 +84,9 @@ class Spec:
             value = getattr(self, f.name)
             if hints.get(f.name) is float and isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
                 object.__setattr__(self, f.name, float(value))
+            nested = _nested_spec(hints.get(f.name))
+            if nested is not None and isinstance(value, Mapping):
+                object.__setattr__(self, f.name, nested(**value))
         canonical(self, full=True, _path=type(self).__qualname__)
 
     def __tensordir_canonical__(self, *, full: bool = False) -> dict:
@@ -188,6 +192,21 @@ def _hints(cls: type) -> dict:
         return typing.get_type_hints(cls, include_extras=True)
     except Exception:
         return {}
+
+
+def _nested_spec(tp: Any) -> type[Spec] | None:
+    """The spec class of a field annotated with one (also `Annotated` or `| None`), else None."""
+    while True:
+        origin = typing.get_origin(tp)
+        if origin is typing.Annotated:
+            tp = typing.get_args(tp)[0]
+        elif origin in (typing.Union, types.UnionType):
+            args = [a for a in typing.get_args(tp) if a is not type(None)]
+            if len(args) != 1:
+                return None
+            tp = args[0]
+        else:
+            return tp if isinstance(tp, type) and issubclass(tp, Spec) else None
 
 
 def _revive(tp: Any, value: Any) -> Any:
