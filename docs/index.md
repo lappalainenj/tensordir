@@ -1,8 +1,26 @@
 # tensordir
 
-tensordir stores results as **records**: directories whose path is the sha256 key of a typed
-spec, the record type and the record's inputs. Asking for a record either reopens it or builds it,
-once, across any number of processes.
+Research code produces many variants of the same result: a model fit per seed, a simulation per
+parameter set, an analysis per dataset. Each takes minutes to days to compute, and weeks later you
+need it again, found by the parameters that produced it. File names that encode parameters
+(`fit_seed3_lr0.001.npz`) break when a parameter is added. A function cache such as
+`joblib.Memory` computes twice when two jobs ask at once and cannot be searched by parameters. An
+experiment-tracking server needs setup and stores arrays as files it cannot look into.
+
+tensordir names each result by the parameters that produced it. You declare the parameters in a
+typed spec and write a `build` method; asking for a result reopens it if it exists and builds it
+otherwise, once, even when many jobs on a shared filesystem ask at the same time. Arrays are
+stored as zarr with named dimensions, so you can query results by their parameters and read a
+parameter sweep back as one labeled xarray array.
+
+| Use tensordir when | Use something else when |
+|---|---|
+| results are expensive and come in many variants of one computation | you track metrics and plots over training time: MLflow, Weights & Biases |
+| results are arrays (fits, simulations, embeddings) | your data is relational and shared by many users with integrity rules: DataJoint |
+| jobs run in parallel on one machine or a cluster with a shared filesystem | your pipeline chains programs in several languages through files: Snakemake |
+| you want to find results later by their parameters, from Python | one process caches a few function calls: `joblib.Memory` |
+
+In code:
 
 ```python
 fit = Fit.get(Fit.Spec(n_columns=8), points=points)   # build or reopen
@@ -39,4 +57,11 @@ and use `df.pipe(td.where, ...)` instead of `df.td.where(...)`; see
 
 See the quickstart in the repository's `README.md`, the [example notebooks](examples/index.md),
 [migrating](migrating.md) from datamate, flyvis and another project, [extending](extending.md)
-tensordir, the [design](design.md) and the [history](history.md) of the package.
+tensordir and the [design](design.md).
+
+## History
+
+tensordir succeeds [datamate](https://github.com/flyvis/datamate) (2020–2025), which managed the
+models of the [flyvis](https://github.com/TuragaLab/flyvis) project and grew out of
+[artisan](https://github.com/MasonMcGill/artisan) (2018). It keeps their idea, a result named by
+the configuration that produced it, and replaces the implementation.

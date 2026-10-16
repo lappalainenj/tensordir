@@ -1,5 +1,5 @@
 site_name: tensordir
-site_description: Content-addressed records of labeled tensors in directories.
+site_description: Name each result by the parameters that produced it; build it once, reopen it anywhere.
 repo_name: tensordir
 docs_dir: docs
 nav:
@@ -21,7 +21,6 @@ nav:
   - Extending: extending.md
   - Design: design.md
   - API: api.md
-  - History: history.md
 theme:
   name: material
   features:
