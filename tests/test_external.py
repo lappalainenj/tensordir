@@ -140,6 +140,11 @@ def test_filter_mappings():
     assert rows({"b": "x"}) == [1, 3]
     assert rows({"b": ("y", "z")}) == [2, None]
     assert rows({"a": None}) == [None]
+    assert rows({"b": td.any_of("y", "z")}) == [2, None]
+    assert rows({"a": td.exactly(2)}) == [2]
+    assert rows({"b": td.exactly(">a")}) == []  # a literal string, not a comparison
     assert expression(pc.field("a") > 1).equals(pc.field("a") > 1)
     with pytest.raises(TypeError):
         expression({"b": re.compile("x")})
+    with pytest.raises(TypeError):
+        expression({"b": td.exactly(["x"])})

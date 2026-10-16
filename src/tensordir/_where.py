@@ -5,7 +5,9 @@ Janne K. Lappalainen et al.). A condition is
 
 - a value: equality (floats within a relative tolerance of 1e-9; `None` matches missing values),
 - a string of comparisons such as `">0.1"` or `">=2, <8"` (comma means AND),
-- a list, tuple or set: equal to the whole sequence or to any of its items (OR),
+- a list or tuple: equal to the whole sequence, or to any of its items (OR); a set: any of its items,
+- `any_of(*conditions)`: any of the conditions (OR), never the whole sequence,
+- `exactly(value)`: equal to `value`, also when it is a list, tuple or a string like `">0.1"`,
 - a compiled regex (`re.compile(...)`): searched in the value's string form,
 - a callable: called with the value, truthy means match.
 
@@ -21,13 +23,56 @@ from typing import Any
 
 import numpy as np
 
-__all__ = ["where", "matches", "mask", "conditions"]
+__all__ = ["where", "matches", "mask", "conditions", "any_of", "exactly"]
 
 _OPS: dict[str, Callable[[Any, Any], Any]] = {
     ">=": operator.ge, "<=": operator.le, "==": operator.eq, "!=": operator.ne, ">": operator.gt, "<": operator.lt,
 }
 _OP_ORDER = sorted(_OPS, key=len, reverse=True)
 _RTOL = 1e-9
+
+
+class AnyOf:
+    """The condition made by `any_of`."""
+
+    __slots__ = ("conditions",)
+
+    def __init__(self, conditions: tuple):
+        self.conditions = conditions
+
+    def __repr__(self) -> str:
+        return f"tensordir.any_of({', '.join(map(repr, self.conditions))})"
+
+
+class Exactly:
+    """The condition made by `exactly`."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any):
+        self.value = value
+
+    def __repr__(self) -> str:
+        return f"tensordir.exactly({self.value!r})"
+
+
+def any_of(*conditions: Any) -> AnyOf:
+    """A condition met when any of `conditions` is: `seed=td.any_of(0, 1)`, `lr=td.any_of(0.1, ">1")`.
+
+    Unlike a bare list, it never matches a field equal to the whole sequence. Each item is a
+    condition of the `where` grammar, except that list and tuple items are compared whole:
+    `layers=td.any_of([8], [8, 16])` finds fields equal to `[8]` or to `[8, 16]`.
+    """
+    return AnyOf(conditions)
+
+
+def exactly(value: Any) -> Exactly:
+    """A condition met only by values equal to `value`: `layers=td.exactly([8, 16])`.
+
+    Unlike a bare list, it never matches a single item; a string is compared as it is, without
+    parsing comparisons such as `">0.1"`. Floats compare within a relative tolerance of 1e-9.
+    """
+    return Exactly(value)
 
 
 def conditions(positional: Mapping[str, Any] | None, keywords: Mapping[str, Any]) -> dict[str, Any]:
@@ -121,6 +166,12 @@ def _compare(value: Any, op: str, target: Any) -> bool:
 
 def matches(value: Any, condition: Any) -> bool:
     """Whether one value (in table form) satisfies `condition`."""
+    if isinstance(condition, Exactly):
+        return _equal(_literal(value) if isinstance(value, (list, tuple)) else value, _literal(condition.value))
+    if isinstance(condition, AnyOf):
+        return any(
+            matches(value, Exactly(item) if isinstance(item, (list, tuple)) else item) for item in condition.conditions
+        )
     if isinstance(condition, re.Pattern):
         return not _missing(value) and condition.search(str(value)) is not None
     if callable(condition) and not isinstance(condition, type):
@@ -157,6 +208,15 @@ def _numeric_mask(array: np.ndarray, condition: Any) -> np.ndarray | None:
 
     if _number(condition):
         return equal(condition)
+    if isinstance(condition, Exactly):
+        return equal(condition.value) if _number(condition.value) else None
+    if isinstance(condition, AnyOf):
+        if not condition.conditions:
+            return np.zeros(array.shape, dtype=bool)
+        parts = [_numeric_mask(array, item) for item in condition.conditions if not isinstance(item, (list, tuple))]
+        if len(parts) != len(condition.conditions) or any(p is None for p in parts):
+            return None
+        return np.logical_or.reduce(parts)
     if isinstance(condition, str):
         parsed = _comparisons(condition)
         if parsed is None or not all(_number(t) for _, t in parsed):
@@ -218,12 +278,28 @@ def where(obj: Any, conditions_: Mapping[str, Any] | None = None, /, **keywords:
     """Rows, records or coordinate entries of `obj` that satisfy every condition.
 
     `obj` is a `Collection` (conditions on the flattened spec), a `pandas.DataFrame` (on columns;
-    `name` also finds `spec.name`), or an xarray object (on coordinates). See the module docstring
-    for the grammar:
+    `name` also finds `spec.name`), or an xarray object (on coordinates). The same conditions
+    work in `Record.query`, `Record.info`, `Collection.where` and the `.td.where` accessors:
+
+    | condition | matches |
+    |---|---|
+    | `0.1`, `"relu"`, `None` | equal values (floats within a relative 1e-9); `None`: missing |
+    | `">1e-3, <0.1"` | all comparisons (comma means AND) |
+    | `[0, 1]`, `(8, 16)` | a value equal to the whole list, or to any item |
+    | `{0, 1}` | any item |
+    | `td.any_of(0, 1)` | any item, never the whole list; items are conditions |
+    | `td.exactly([8, 16])` | only the whole list; strings are not parsed as comparisons |
+    | `re.compile("^base")` | values whose string form contains a match |
+    | `lambda v: v > 0` | values for which the callable is truthy |
+
+    A bare list is tried as a whole, then item by item: `seed=[0, 1]` finds either seed,
+    `layers=[8, 16]` the list `[8, 16]`, `layers=[[8], [16]]` either list. Use `any_of` or
+    `exactly` to allow only one reading.
 
     ```python
     td.where(Fit.query().table(), seed=[0, 1], model__lr=">1e-3, <0.1", tag=re.compile("^base"))
     responses.pipe(td.where, cell_type=["T4a", "T4b"], time=">=0")
+    Net.query(layers=td.exactly([8, 16]))
     ```
     """
     conds = conditions(conditions_, keywords)

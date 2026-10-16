@@ -181,8 +181,10 @@ Fit.query().table(varying_only=True)                              # only what di
 ```
 
 Conditions are the same for `Record.query`, `Collection.where` and `tensordir.where`: a value
-(equality, floats to a relative 1e-9), a list (any of), comparison strings (`">0.1, <=1"`), a
-compiled regex, or a callable. Nested names use `__` or a mapping with dotted keys.
+(equality, floats to a relative 1e-9), a list (the whole list or any item; `td.any_of(...)` and
+`td.exactly(...)` pick one), comparison strings (`">0.1, <=1"`), a compiled regex, or a
+callable; see [Conditions](design.md#conditions). Nested names use `__` or a mapping with dotted
+keys.
 
 ```python
 # flyvis

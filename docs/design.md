@@ -320,6 +320,31 @@ uses the codec registry:
 - `View` wraps a record with a joblib cache in `<record>/__cache__`. `cached_method` caches per
   instance, keyed on the canonical bound arguments.
 
+### Conditions
+
+`Record.query`, `Record.info`, `Collection.where`, `tensordir.where` and the `.td.where`
+accessors take one condition per name:
+
+| condition | matches |
+|---|---|
+| `0.1`, `"relu"` | equal values; floats within a relative tolerance of 1e-9 |
+| `None` | missing values (None, NaN, NA) |
+| `">1e-3, <0.1"` | values meeting every comparison (comma means AND) |
+| `[0, 1]`, `(8, 16)` | values equal to the whole list, or to any of its items |
+| `{0, 1}` | values equal to any item |
+| `td.any_of(0, 1)` | values meeting any item; items are conditions; never the whole list |
+| `td.exactly([8, 16])` | values equal to the whole list only; strings are not parsed as comparisons |
+| `re.compile("^base")` | values whose string form contains a match |
+| `lambda v: v > 0` | values for which the callable returns a truthy result |
+
+A bare list means "any of" for scalar fields (`seed=[0, 1]`) and "equal" for list-valued fields
+(`layers=[8, 16]`), and `layers=[[8], [16]]` finds either list. The rule tries the whole list
+first, then each item, so one condition can match both ways when a field holds scalars in some
+records and lists in others. `td.exactly([8, 16])` allows only the whole list and
+`td.any_of([8], [16])` only the items; inside `any_of`, list items compare whole. Filters on
+external tables (`DeltaRef.to_table(filter=...)`) accept the pushdown-able subset: values,
+`None`, lists and `any_of` of values, `exactly` of a scalar, and comparisons.
+
 ## Legacy data
 
 `tensordir.legacy.open_datamate(path)` reads datamate directories without writing to them:

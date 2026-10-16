@@ -39,6 +39,17 @@ from tensordir._where import mask, matches
         (pd.NA, 1, False),
         (pd.NA, ">0", False),
         (1, None, False),
+        ("[8, 8]", td.any_of(8, 16), False),  # any_of never compares the whole sequence
+        (8, td.any_of(8, 16), True),
+        (3, td.any_of(1, ">2"), True),  # items are conditions
+        ("[8, 8]", td.any_of([8, 8], [4]), True),  # list items compare whole
+        (8, td.any_of([8, 8], [4]), False),
+        ("[8, 16]", td.exactly([8, 16]), True),
+        (8, td.exactly([8, 16]), False),  # exactly never matches an item
+        ([8, 16], td.exactly((8, 16)), True),  # raw lists (not in table form) too
+        (">2", td.exactly(">2"), True),  # no comparison parsing
+        (3, td.exactly(">2"), False),
+        (0.1 + 0.2, td.exactly(0.3), True),
     ],
 )
 def test_matches(value, condition, expected):
@@ -47,12 +58,49 @@ def test_matches(value, condition, expected):
 
 def test_numeric_mask_agrees_with_matches():
     values = np.array([0.0, 0.1, 0.30000000000000004, 1.0, np.nan])
-    for condition in [0.3, ">0.05", ">=0.1, <1", "!=0.1", [0.0, 1.0], "relu", lambda v: v > 0.5]:
+    for condition in [0.3, ">0.05", ">=0.1, <1", "!=0.1", [0.0, 1.0], "relu", lambda v: v > 0.5, td.any_of(0.0, 1.0)]:
         expected = [matches(v, condition) for v in values]
         assert mask(values, condition).tolist() == expected, condition
     ints = np.arange(5)
     assert mask(ints, [1, 3]).tolist() == [False, True, False, True, False]
     assert mask(ints, ">=3").tolist() == [False, False, False, True, True]
+    assert mask(ints, td.any_of(1, 3)).tolist() == [False, True, False, True, False]
+    assert mask(ints, td.exactly(3)).tolist() == [False, False, False, True, False]
+    assert not mask(ints, td.exactly([1, 3])).any()
+    assert mask(values, td.any_of(0.3, ">0.9")).tolist() == [False, False, True, True, False]
+
+
+def test_wrappers_everywhere(root):
+    class Layered(td.Record):
+        __record_name__ = "WhereLayered"
+
+        class Spec(td.Spec):
+            layers: list[int]
+
+        def build(self, spec):
+            self["n"] = len(spec.layers)
+
+    for layers in ([8], [16], [8, 16]):
+        Layered.get({"layers": layers})
+
+    def found(collection):
+        return sorted(tuple(r.spec.layers) for r in collection)
+
+    assert found(Layered.query(layers=[8, 16])) == [(8, 16)]  # the whole list (no field equals 8)
+    assert found(Layered.query(layers=[[8], [16]])) == [(8,), (16,)]  # any item
+    assert found(Layered.query(layers=td.any_of(8, 16))) == []
+    assert found(Layered.query(layers=td.exactly([8, 16]))) == [(8, 16)]
+    assert found(Layered.query(layers=td.any_of([8], [16]))) == [(8,), (16,)]
+    assert found(Layered.query().where(layers=td.exactly([8]))) == [(8,)]
+    assert found(td.where(Layered.query(), layers=td.exactly([16]))) == [(16,)]
+    table = Layered.info(sizes=False)
+    assert len(td.where(table, layers=td.exactly([8, 16]))) == 1
+    assert len(table.td.where(layers=td.any_of([8], [8, 16]))) == 2
+    series = pd.Series([1, 2, 3], index=pd.Index(["a", "b", "c"], name="tag"))
+    assert series.td.where(td.any_of(1, 3), tag=td.exactly("c")).tolist() == [3]
+    data = xr.DataArray([1, 2, 3], dims="x", coords={"x": [0.1, 0.2, 0.3]})
+    assert data.td.where(x=td.any_of(0.1, 0.3)).values.tolist() == [1, 3]
+    assert repr(td.any_of(1, "a")) == "tensordir.any_of(1, 'a')" and repr(td.exactly([1])) == "tensordir.exactly([1])"
 
 
 def test_where_on_frames():

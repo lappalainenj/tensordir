@@ -28,6 +28,10 @@
 
 ::: tensordir.where
 
+::: tensordir.any_of
+
+::: tensordir.exactly
+
 ::: tensordir.accessors
 
 ::: tensordir.diff

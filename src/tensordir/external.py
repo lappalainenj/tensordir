@@ -30,7 +30,7 @@ from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any, ClassVar
 
-from ._where import _comparisons
+from ._where import AnyOf, Exactly, _comparisons
 from .errors import TensordirError
 
 __all__ = ["DeltaRef", "ParquetRef", "SnapshotChanged", "TableRef", "expression"]
@@ -55,7 +55,8 @@ def expression(filter: Any) -> Any:
     """A pyarrow filter expression from an expression, None, or a mapping of column conditions.
 
     Mapping values follow the pushdown-able part of `tensordir.where`: a value (equality, `None`
-    for null), a list/tuple/set (any of), or comparisons such as `">=2, <8"`. Conditions AND.
+    for null), a list/tuple/set or `any_of(...)` of values (any of), `exactly(value)` for a
+    scalar, or comparisons such as `">=2, <8"`. Conditions AND.
     """
     if filter is None or not isinstance(filter, Mapping):
         return filter
@@ -65,10 +66,15 @@ def expression(filter: Any) -> Any:
     out = None
     for name, condition in filter.items():
         column = pc.field(*name.split(".")) if "." in name else pc.field(name)
-        if condition is None:
+        if isinstance(condition, Exactly):
+            if isinstance(condition.value, (list, tuple, set, frozenset, Mapping)):
+                raise TypeError(f"{name}: exactly() of a sequence cannot be pushed down; filter the result")
+            term = column.is_null() if condition.value is None else column == condition.value
+        elif condition is None:
             term = column.is_null()
-        elif isinstance(condition, (list, tuple, set, frozenset)):
-            term = column.isin(pa.array(list(condition)))
+        elif isinstance(condition, (list, tuple, set, frozenset, AnyOf)):
+            items = condition.conditions if isinstance(condition, AnyOf) else condition
+            term = column.isin(pa.array(list(items)))
         elif isinstance(condition, str) and (parsed := _comparisons(condition)) is not None:
             term = None
             for op, target in parsed:

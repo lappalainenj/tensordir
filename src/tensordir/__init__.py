@@ -3,7 +3,7 @@
 from ._canonical import Digest
 from ._diff import SpecDiff, diff
 from ._root import get_root, root, set_root, use_root
-from ._where import where
+from ._where import any_of, exactly, where
 from .codecs import Codec, register_codec
 from .collection import Collection
 from .dims import Dims, dim_name, dims_for, register_dims
@@ -72,10 +72,12 @@ __all__ = [
     "StoreBackend",
     "TensordirError",
     "View",
+    "any_of",
     "cached_method",
     "diff",
     "dim_name",
     "dims_for",
+    "exactly",
     "field",
     "get_root",
     "memory",
