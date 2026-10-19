@@ -1,7 +1,7 @@
 [project]
 name = "tensordir"
 version = "0.1.0"
-description = "Content-addressed records of labeled tensors in directories: build once from a spec, reopen anywhere."
+description = "Name each result by the parameters that produced it: built once across processes, reopened anywhere, stored as labeled zarr tensors."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -22,6 +22,10 @@ dependencies = [
     "numpy>=1.26",
     "zarr>=3.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/lappalainenj/tensordir"
+Issues = "https://github.com/lappalainenj/tensordir/issues"
 
 [project.optional-dependencies]
 xarray = [
