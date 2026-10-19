@@ -871,8 +871,7 @@ class Record:
             rows.append((name, info["codec"], " ".join(parts)))
         return rows
 
-    def tree(self) -> None:
-        """Print the record's type, key, status, path and stored fields with their shapes and dims."""
+    def _tree(self) -> str:
         rows = self._field_rows()
         if (self._path / "__cache__").is_dir():
             rows.append(("__cache__/", "joblib", ""))
@@ -881,7 +880,20 @@ class Record:
         for i, (name, codec, details) in enumerate(rows):
             branch = "└──" if i == len(rows) - 1 else "├──"
             lines.append(f"{branch} {name:<{width}}  {codec:<11} {details}".rstrip())
-        print("\n".join(lines))
+        return "\n".join(lines)
+
+    def tree(self) -> None:
+        """Print the record's type, key, status, path and stored fields with their shapes and dims.
+
+        IPython shows the same tree for a record that ends a cell; `repr` stays one line."""
+        print(self._tree())
+
+    def _repr_pretty_(self, printer: Any, cycle: bool) -> None:
+        try:
+            text = repr(self) if cycle else self._tree()
+        except Exception:
+            text = repr(self)
+        printer.text(text)
 
     def _repr_html_(self) -> str:
         import html

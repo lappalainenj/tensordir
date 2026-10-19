@@ -107,6 +107,15 @@ def test_record_tree_and_html(root, capsys):
     assert capsys.readouterr().out.strip() == f"{absent!r} {absent.path}"
 
 
+def test_ipython_shows_the_tree_and_repr_stays_one_line(root, capsys):
+    pretty = pytest.importorskip("IPython.lib.pretty").pretty
+    record = Train.get({"seed": 0})
+    record.tree()
+    assert pretty(record) == capsys.readouterr().out.rstrip("\n")
+    assert "\n" not in repr(record) and "\n" not in repr([record])
+    assert pretty([record]).count("├──") == pretty(record).count("├──")
+
+
 def test_failed_record_html(root):
     class Broken(td.Record):
         __record_name__ = "InspectBroken"
