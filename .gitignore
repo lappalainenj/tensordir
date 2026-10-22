@@ -11,3 +11,6 @@ site/
 .DS_Store
 *.code-workspace
 .vscode/
+
+# local notes, not part of the package
+dev/
