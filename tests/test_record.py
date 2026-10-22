@@ -54,6 +54,14 @@ def test_init_signature_is_the_interface():
     with pytest.raises(TypeError):
         Fit.compute_key(x, 2)  # settings are keyword-only
 
+
+def test_a_plain_parameter_is_rejected_with_a_valid_signature():
+    with pytest.raises(TypeError, match=r"valid signature would be __init__\(self, x, /, \*, n_points, seed\)"):
+
+        class Plain(td.Record):
+            def __init__(self, x, /, n_points: int = 300, *args, seed: int = 0, **kwargs):
+                pass
+
     for bad in ("def __init__(self, x): pass", "def __init__(self, *, root=None): pass",
                 "def __init__(self, **kwargs): pass"):
         namespace = {}

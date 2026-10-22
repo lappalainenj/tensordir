@@ -112,6 +112,19 @@ class Interface:
         )
 
 
+def _suggest(signature: inspect.Signature) -> str:
+    """A valid record signature from `signature`: positional-only parameters stay inputs, the
+    other named parameters become settings, and `*args`/`**kwargs` are dropped."""
+    parameters = list(signature.parameters.values())[1:]
+    kinds = inspect.Parameter
+    inputs = [p.name for p in parameters if p.kind is kinds.POSITIONAL_ONLY]
+    settings = [p.name for p in parameters if p.kind in (kinds.POSITIONAL_OR_KEYWORD, kinds.KEYWORD_ONLY)]
+    parts = ["self", *inputs, "/"]
+    if settings:
+        parts += ["*", *settings]
+    return f"__init__({', '.join(parts)})"
+
+
 def interface_of(cls: type, init: Any) -> Interface:
     """Parse `init` (the `__init__` of record type `cls`) into its interface and generated spec."""
     signature = inspect.signature(init)
@@ -128,7 +141,7 @@ def interface_of(cls: type, init: Any) -> Interface:
         if kind is not inspect.Parameter.KEYWORD_ONLY:
             raise TypeError(
                 f"{where}: parameter {parameter.name!r} must be positional-only (an input, before /) or "
-                f"keyword-only (a setting, after *)"
+                f"keyword-only (a setting, after *); a valid signature would be {_suggest(signature)}"
             )
         annotation, options, is_transient = _split(hints.get(parameter.name, Any))
         if is_transient:
