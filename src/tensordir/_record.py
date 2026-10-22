@@ -319,7 +319,9 @@ class Record(Directory):
             klass = _REGISTRY.get(meta["type"], cls)
             return klass._new(path, key=meta["key"], managed_root=_managed_root(path, meta["key"]))
         inputs, spec, transients = cls._interface.bind(inputs, settings)
-        record = cls._new(path, key=cls._key_of(spec, cls._identify(inputs)), managed_root=None, spec=spec)
+        key = cls._key_of(spec, cls._identify(inputs))
+        # a managed record's path shares its lease with the keyed call, so neither builds twice
+        record = cls._new(path, key=key, managed_root=_managed_root(path, key), spec=spec)
         record.__dict__["_call"] = (inputs, transients)
         return record._obtain(block=block, timeout=timeout, retry_failed=retry_failed)
 

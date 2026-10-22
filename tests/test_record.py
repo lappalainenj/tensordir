@@ -201,6 +201,11 @@ def test_hand_named_directories(tmp_path):
         td.Record.at(tmp_path / "nothing")
 
 
+def test_at_on_a_managed_path_shares_the_keyed_lease(root):
+    rec = Square.locate(n=3)
+    assert Square.at(Square(n=3).path, n=3)._lock == rec._lock  # one lease per directory
+
+
 class Downstream(td.Record):
     __record_name__ = "Downstream"
 
