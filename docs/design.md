@@ -259,8 +259,8 @@ Tests cover six processes racing for one record (exactly one build), SIGKILL dur
 | `numpy.ndarray` | `hdf5` | `<name>.h5`, dataset `data` with dimension labels; opt-in |
 
 `record["x"]` returns a lazy handle: a `zarr.Array`, an xarray object opened without loading, or
-a `pyarrow.dataset.Dataset` for `arrow` fields. `record.x` returns the type that was written: an
-ndarray for arrays, read into memory, and the lazy handle for the others. `record.load("x")`
+a `pyarrow.dataset.Dataset` for `arrow` fields. `record.x` returns the same lazy handle, except
+for fields typed as numpy arrays (jaxtyping), which it reads into an ndarray. `record.load("x")`
 always loads. `register_codec` adds codecs, and
 later registrations are tried first.
 
@@ -284,8 +284,9 @@ default because HDF5 trades away what matters on clusters:
   datamate's `extend`. The contract matches zarr appends: rows must match the trailing shape,
   values are cast to the stored dtype, and a field written with `write` cannot be appended to.
   The file is modified in place, so a reader can see a partly appended tail.
-- **Open handles.** `record["x"]` returns an `h5py.Dataset` whose file stays open until the
-  handle is dropped; `record.x` and `record.load("x")` read into memory and close the file.
+- **Open handles.** `record["x"]` (and `record.x` for fields not typed as numpy arrays) returns
+  an `h5py.Dataset` whose file stays open until the handle is dropped; `record.load("x")` and
+  typed numpy fields read into memory and close the file.
 
 ## External tables
 

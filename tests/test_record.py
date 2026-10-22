@@ -209,13 +209,13 @@ def test_hand_named_directories(tmp_path):
         td.Record.at(tmp_path / "nothing")
 
 
-def test_untyped_arrays_read_back_as_numpy(root):
+def test_untyped_arrays_read_lazily(root):
     class Untyped(td.Record):
         def __init__(self, /, *, n: int = 3):
             self.values = np.arange(n)
 
     record = Untyped()
-    assert type(record.values) is np.ndarray and type(record["values"]).__name__ == "Array"
+    assert type(record.values).__name__ == "Array" and list(record.values[:]) == [0, 1, 2]
 
 
 def test_calling_a_record_inside_its_own_build_raises(root):

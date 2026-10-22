@@ -25,7 +25,7 @@ In code:
 
 ```python
 fit = Fit(points, n_columns=8)                        # build or reopen
-fit.centres                                           # numpy array
+fit.centres                                           # lazy zarr.Array; numpy if typed as one
 fit["centres"]                                        # lazy zarr.Array
 Fit.query(seed=0).table()                             # one row per record
 Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray results

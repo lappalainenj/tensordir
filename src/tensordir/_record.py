@@ -693,11 +693,8 @@ class Record(Directory):
         if name.startswith("_") or "_path" not in self.__dict__:
             raise AttributeError(name)
         typed = type(self)._typed_fields()
-        manifest = self._manifest()
-        if name in manifest:
-            # arrays read back as numpy, as written; record["name"] gives the lazy handle
-            eager = _wants_numpy(typed[name]) if name in typed else manifest[name].get("codec") in _ARRAY_CODECS
-            return self._read(name, lazy=not eager)
+        if name in self._manifest():
+            return self._read(name, lazy=not (name in typed and _wants_numpy(typed[name])))
         if name in typed:
             raise AttributeError(f"{self!r}: field {name!r} has not been written")
         raise AttributeError(f"{type(self).__qualname__!r} has no attribute or field {name!r}")
@@ -1118,10 +1115,6 @@ def resolve_type(type_id: str) -> type[Record]:
 
 #: The builds running in this process, by lock path, with the thread running each.
 _BUILDING: dict[Path, int] = {}
-
-#: Codecs whose lazy handle (zarr or h5py) is not an ndarray; attribute access reads them.
-_ARRAY_CODECS = frozenset({"ndarray", "hdf5"})
-
 
 def _managed_root(path: Path, key: str | None) -> Path | None:
     """The root of a content-addressed record at `path`, or None for a hand-named directory."""

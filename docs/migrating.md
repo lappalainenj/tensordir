@@ -37,7 +37,7 @@ spec or inputs.
 | **Open & read** | `Directory(path)` | `td.Record.at(path)` (returns the registered class) |
 | | `dir.config.x`, `dir.config.to_dict()` | `record.spec.x`, `record.spec.to_dict()`, `record.spec.flat()` |
 | | `dir.meta`, `dir.status` | `record.meta`, `record.status`, `record.error` |
-| | `dir.x[:]`, `dir.x[()]`, `dir["x"]` (HDF5 `ArrayFile`) | `record.x` (numpy), `record["x"][:]` (lazy zarr), `record.load("x")` |
+| | `dir.x[:]`, `dir.x[()]`, `dir["x"]` (HDF5 `ArrayFile`) | `record.x` (lazy zarr; numpy for typed fields), `record["x"][:]`, `record.load("x")` |
 | | `"x" in dir`, `dir.keys()`, `dir.tree()`, `repr(dir)` | `"x" in record`, `record.keys()`, `record.tree()`; IPython shows the tree for a record that ends a cell, Jupyter an HTML table, `repr` one line |
 | | sub-directories (`connectome.nodes.type[:]`) | one DataFrame (`parquet`) or `xarray.Dataset`/`DataTree` field |
 | | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `__init__`; `record.nodes` is the DataFrame |
