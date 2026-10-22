@@ -135,3 +135,53 @@ def test_stage_declarations_are_validated():
         @stages
         def b(self):
             pass
+
+
+def test_progress_lists_every_stage_with_its_state(root):
+    record = Pipeline()
+    progress = record.progress()
+    assert [s.name for s in progress] == ["prepare", "fit", "epoch", "preview"]
+    assert [s.state for s in progress] == ["done", "done", "done", "pending"]
+    assert progress["epoch"].calls == 3 and progress["epoch"].repeat and progress["prepare"].fields == ("data",)
+    assert progress["fit"].duration_s >= 0 and progress["fit"].started <= progress["fit"].finished
+    assert progress.current is None and "pending" in repr(progress)
+    record.preview()
+    assert record.progress()["preview"].state == "done"
+
+
+def test_progress_follows_a_running_build_and_marks_the_failed_stage(root):
+    seen = []
+
+    class Watched(td.Record):
+        __record_name__ = "StagedWatched"
+        stages = td.Stages(first=td.Stage(), second=td.Stage(after="first"))
+
+        def __init__(self, /, *, fail: bool = False):
+            self.first().second()
+
+        @stages
+        def first(self):
+            self.a = 1
+
+        @stages
+        def second(self):
+            seen.append(td.Record.at(self.path).progress().current.name)  # another handle, from disk
+            if self.spec.fail:
+                raise RuntimeError("lost")
+            self.b = 2
+
+    assert Watched().status == "done" and seen == ["second"]
+    with pytest.raises(td.BuildFailed):
+        Watched(fail=True)
+    progress = Watched.locate(fail=True).progress()
+    assert progress["first"].state == "done" and progress["second"].state == "failed"
+
+
+def test_records_without_stages_have_empty_progress(root):
+    class Plain(td.Record):
+        __record_name__ = "StagedPlain"
+
+        def __init__(self, /, *, n: int = 1):
+            self.x = n
+
+    assert len(Plain().progress()) == 0 and Plain().progress().current is None

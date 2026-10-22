@@ -21,7 +21,7 @@ from .errors import (
 from .external import DeltaRef, ParquetRef, SnapshotChanged
 from .index import reindex
 from ._signature import transient
-from ._stages import Stage, StageOrderError, Stages
+from ._stages import Progress, Stage, StageOrderError, StageProgress, Stages
 from ._record import Record
 from .spec import Spec, field
 from .view import View, cached_method
@@ -76,8 +76,10 @@ __all__ = [
     "SnapshotChanged",
     "Spec",
     "SpecDiff",
+    "Progress",
     "Stage",
     "StageOrderError",
+    "StageProgress",
     "Stages",
     "StoreBackend",
     "TensordirError",

@@ -27,17 +27,20 @@ class Fit(td.Record):
   (`self.x = ...`), not private attributes.
 - An optional stage (`required=False`) may run after the record is `done`. It may add fields and
   rewrite the fields it added itself, never the others.
+- `record.progress()` lists every stage with its calls, times and fields, also while another
+  process builds the record.
 """
 
 import dataclasses
 import datetime
 import functools
+import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from .errors import ReadOnlyError, TensordirError
 
-__all__ = ["Stage", "Stages", "StageOrderError"]
+__all__ = ["Stage", "Stages", "StageOrderError", "StageProgress", "Progress"]
 
 
 class StageOrderError(TensordirError):
@@ -137,13 +140,95 @@ def _run_stage(record: Any, stages: Stages, name: str, method: Callable, args: t
 
 
 def _call(record: Any, name: str, method: Callable, args: tuple, kwargs: dict, progress: dict) -> None:
-    """Call the stage method and note its call count, finish time and the fields it added."""
+    """Call the stage method and note its calls, start and finish times, duration and the fields it
+    added. Inside a build, the start is written first, so readers see which stage is running."""
+    info = progress.setdefault(name, {"calls": 0, "started": None, "finished": None, "duration_s": None, "fields": []})
+    info["started"] = _now()
+    if record._writable and record.__dict__.get("_stage_owner") is None:
+        record._write_meta()
     before = set(record._manifest())
+    t0 = time.monotonic()
     method(record, *args, **kwargs)
-    info = progress.setdefault(name, {"calls": 0, "finished": None, "fields": []})
     info["calls"] += 1
     info["finished"] = _now()
+    info["duration_s"] = time.monotonic() - t0
     info["fields"] = sorted(set(info["fields"]) | (set(record._manifest()) - before))
+
+
+@dataclasses.dataclass(frozen=True)
+class StageProgress:
+    """One stage of a record: its declaration and what has run (times of the latest call)."""
+
+    name: str
+    state: str  # "pending", "running", "failed" or "done"
+    calls: int
+    started: str | None
+    finished: str | None
+    duration_s: float | None
+    fields: tuple[str, ...]
+    after: tuple[str, ...]
+    repeat: bool
+    required: bool
+
+
+class Progress(tuple):
+    """The stages of a record in declaration order, as `StageProgress` items."""
+
+    @property
+    def current(self) -> StageProgress | None:
+        """The stage running now, or None."""
+        return next((s for s in self if s.state == "running"), None)
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, str):
+            for stage in self:
+                if stage.name == key:
+                    return stage
+            raise KeyError(f"no stage {key!r}; stages: {[s.name for s in self]}")
+        return super().__getitem__(key)
+
+    def __repr__(self) -> str:
+        if not self:
+            return "Progress(no stages)"
+        width = max(len(s.name) for s in self)
+        lines = [
+            (
+                f"{s.name:<{width}}  {s.state:<7}  calls {s.calls:<3}"
+                + (f"  {'last call' if s.repeat else 'took'} {s.duration_s:.2f} s" if s.duration_s is not None else "")
+                + (f"  fields {', '.join(s.fields)}" if s.fields else "")
+            ).rstrip()
+            for s in self
+        ]
+        return "\n".join(lines)
+
+
+def progress_of(record: Any, meta: dict, status: str) -> Progress:
+    """The progress of every declared stage of `record`, from its metadata `meta` and `status`."""
+    stored = meta.get("stages", {})
+    items = []
+    for stages in stages_of(type(record)):
+        for name, stage in stages.stages.items():
+            info = stored.get(name, {})
+            started, finished = info.get("started"), info.get("finished")
+            if started is not None and (finished is None or started > finished):
+                state = "failed" if status in ("failed", "stale") else "running"
+            else:
+                state = "done" if info.get("calls", 0) else "pending"
+            items.append(
+                StageProgress(
+                    name=name,
+                    state=state,
+                    calls=info.get("calls", 0),
+                    started=started,
+                    finished=finished,
+                    duration_s=info.get("duration_s"),
+                    fields=tuple(info.get("fields", ())),
+                    after=stage.after,
+                    repeat=stage.repeat,
+                    required=stage.required,
+                )
+            )
+    return Progress(items)
 
 
 def check_required(record: Any) -> None:

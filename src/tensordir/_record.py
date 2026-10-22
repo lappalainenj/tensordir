@@ -29,7 +29,7 @@ from .codecs import atomic_path, codec_for, get_codec, remove_tree
 from .dims import dims_for
 from .errors import BuildFailed, DimsError, KeyCollision, ReadOnlyError, RecordBusy
 from ._signature import Interface, interface_of
-from ._stages import check_required, stages_of
+from ._stages import Progress, check_required, progress_of, stages_of
 from .spec import Spec as _Spec
 
 __all__ = ["Record", "Status", "FORMAT"]
@@ -578,6 +578,12 @@ class Record(Directory):
         if meta is None:
             raise FileNotFoundError(f"{self!r} does not exist (status {self.status})")
         return meta
+
+    def progress(self) -> Progress:
+        """Every declared stage with its state, calls, times and fields, read from disk, so it
+        follows a build running in another process; empty for a record type without stages."""
+        meta = self._meta if self._writable else (self._disk_meta() or {})
+        return progress_of(self, meta, self.status)
 
     @property
     def status(self) -> Status:

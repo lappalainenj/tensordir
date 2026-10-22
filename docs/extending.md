@@ -711,7 +711,17 @@ fit = Fit()
 assert fit.meta["stages"]["epoch"]["calls"] == 3
 fit.preview()  # an optional stage on the finished record
 assert "summary" in fit and fit.status == "done"
+
+progress = fit.progress()  # read from disk: another process can follow a running build
+print(progress)  # one line per stage: state, calls, duration, fields
+assert progress["epoch"].calls == 3 and progress["preview"].state == "done"
+assert progress.current is None  # the stage running now, if any
 ```
+
+`record.progress()` lists every declared stage in order with its state (`pending`, `running`,
+`failed` or `done`), its number of calls, the start and finish times and duration of its latest
+call, and the fields it wrote. The start of each stage is written before the stage runs, so a
+reader in another process sees which stage is running.
 
 ## Records that change after the build
 
