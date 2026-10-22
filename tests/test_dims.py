@@ -103,7 +103,7 @@ class Profile(td.Record):
     counts: Int[np.ndarray, "n_types"]
     mask: Bool[np.ndarray, "n_points"]
 
-    def build(self, spec):
+    def __init__(self):
         self.positions = np.zeros((4, 3))
         self.types = np.array([0, 1, 1, 0])
         self.matrix = np.eye(2)
@@ -129,7 +129,7 @@ class Variadic(td.Record):
 
     x: Float[np.ndarray, "*batch n_dims"]
 
-    def build(self, spec):
+    def __init__(self):
         self.x = np.zeros((2, 3))
 
 
@@ -143,7 +143,7 @@ class ExplicitWrite(td.Record):
 
     x: Float[np.ndarray, "*batch n_dims"]
 
-    def build(self, spec):
+    def __init__(self):
         self.write("x", np.zeros((2, 3)), dims=("sample", "dim"))
         self.write("free", np.zeros(2), dims=("item",))
 
@@ -157,7 +157,7 @@ def test_explicit_dims_at_write(root):
 class WrongRank(td.Record):
     __record_name__ = "WrongRank"
 
-    def build(self, spec):
+    def __init__(self):
         self.write("x", np.zeros(3), dims=("a", "b"))
 
 

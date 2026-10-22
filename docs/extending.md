@@ -8,10 +8,10 @@ packages (named in the `# requires:` line) are missing.
 |---|---|
 | store a new type of value in a record | a `Codec` passed to `register_codec` |
 | name array axes that the default rule gets wrong | `register_dims`, a record's `dims`, `Dims` |
-| build a record from other records or arrays | inputs to `Record.get`, or nested specs |
+| build a record from other records or arrays | inputs before `/`, or nested specs |
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
 | store event tables larger than memory | a `pyarrow.RecordBatchReader` field, read as a dataset |
-| let an existing class fill a record over time | `@td.record`, or a `mutable = True` record |
+| let a record change after its build | a `mutable = True` record |
 | depend on a Delta table or parquet directory outside the root | `td.DeltaRef`, `td.ParquetRef` |
 | change how joblib stores cached results | a registered `Codec`, or a `td.StoreBackend` subclass |
 
@@ -92,20 +92,15 @@ td.register_codec(ModuleCodec())  # tried before the built-in safetensors codec
 class Train(td.Record):
     __record_name__ = "Train"
 
-    class Spec(td.Spec):
-        n_hidden: int = 16
-        n_steps: int = 50
-        seed: int = 0
-
     model: MLP
 
-    def build(self, spec):
-        torch.manual_seed(spec.seed)
-        model = MLP(2, spec.n_hidden, 1)
+    def __init__(self, /, *, n_hidden: int = 16, n_steps: int = 50, seed: int = 0):
+        torch.manual_seed(seed)
+        model = MLP(2, n_hidden, 1)
         x = torch.randn(256, 2)
         y = x.prod(dim=1, keepdim=True)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-        for _ in range(spec.n_steps):
+        for _ in range(n_steps):
             optimizer.zero_grad()
             loss = torch.nn.functional.mse_loss(model(x), y)
             loss.backward()
@@ -114,7 +109,7 @@ class Train(td.Record):
         self.model = model
 
 
-run = Train.get()
+run = Train()
 model = run.model  # an MLP with the trained weights
 assert isinstance(model, MLP) and model.config == {"n_in": 2, "n_hidden": 16, "n_out": 1}
 assert run.meta["fields"]["model"]["codec"] == "torch_module"
@@ -177,17 +172,14 @@ td.register_codec(JpegCodec())
 class Thumbnail(td.Record):
     __record_name__ = "Thumbnail"
 
-    class Spec(td.Spec):
-        size: int = 64
-
-    def build(self, spec):
-        y, x = np.mgrid[: spec.size, : spec.size]
-        pixels = (np.stack([x, y, x[:, ::-1]], axis=-1) * 255 // (spec.size - 1)).astype(np.uint8)
+    def __init__(self, /, *, size: int = 64):
+        y, x = np.mgrid[: size, : size]
+        pixels = (np.stack([x, y, x[:, ::-1]], axis=-1) * 255 // (size - 1)).astype(np.uint8)
         self["image"] = Image.fromarray(pixels)
         self.write("preview", Image.fromarray(pixels), codec="jpeg")
 
 
-thumb = Thumbnail.get()
+thumb = Thumbnail()
 assert np.asarray(thumb["image"]).shape == (64, 64, 3)
 assert thumb.meta["fields"]["preview"]["codec"] == "jpeg"
 thumb.tree()
@@ -237,17 +229,13 @@ td.register_codec(GifCodec())
 class Stimulus(td.Record):
     __record_name__ = "Stimulus"
 
-    class Spec(td.Spec):
-        n_frames: int = 12
-        size: int = 32
-
-    def build(self, spec):
-        x = np.arange(spec.size)
-        frames = [(np.sin(x[None, :] / 3 + t) > 0) * np.ones((spec.size, 1)) for t in range(spec.n_frames)]
+    def __init__(self, /, *, n_frames: int = 12, size: int = 32):
+        x = np.arange(size)
+        frames = [(np.sin(x[None, :] / 3 + t) > 0) * np.ones((size, 1)) for t in range(n_frames)]
         self["movie"] = Video((np.array(frames) * 255).astype(np.uint8), fps=12)
 
 
-movie = Stimulus.get().movie
+movie = Stimulus().movie
 assert len(movie.frames) == 12 and movie.fps == 12
 ```
 
@@ -302,18 +290,15 @@ td.register_codec(Int16Codec())
 class Responses(td.Record):
     __record_name__ = "Responses"
 
-    class Spec(td.Spec):
-        n_cells: int = 50
-
-    def build(self, spec):
+    def __init__(self, /, *, n_cells: int = 50):
         t = np.linspace(0, 1, 200)
-        gain = np.random.default_rng(0).uniform(0.5, 1.5, (spec.n_cells, 1))
+        gain = np.random.default_rng(0).uniform(0.5, 1.5, (n_cells, 1))
         responses = xr.Dataset({"voltage": (("cell", "time"), gain * np.sin(2 * np.pi * 5 * t))}, coords={"time": t})
         self.write("quantized", responses, codec="int16")
         self["exact"] = responses
 
 
-record = Responses.get()
+record = Responses()
 quantized, exact = record.load("quantized"), record.load("exact")
 assert quantized.voltage.encoding["dtype"] == np.int16
 assert float(abs(quantized.voltage - exact.voltage).max()) <= 0.5e-3 + 1e-12
@@ -323,7 +308,7 @@ assert float(abs(quantized.voltage - exact.voltage).max()) <= 0.5e-3 + 1e-12
 
 Spike times, synapse lists and other event data can have far more rows than fit in memory. A
 `pandas.DataFrame` field is written and read whole, so use the arrow codec instead: assign a
-`pyarrow.RecordBatchReader` and it is written to parquet batch by batch, so `build` never holds
+`pyarrow.RecordBatchReader` and it is written to parquet batch by batch, so `__init__` never holds
 all rows. `record[name]` then opens a `pyarrow.dataset.Dataset` that reads only the columns you
 select, and skips row groups whose statistics rule out your filter. Each batch becomes at least
 one row group, so write batches in the order you will filter by, here time. For a job array, make
@@ -345,25 +330,20 @@ SCHEMA = pa.schema([("time", pa.float64()), ("unit", pa.int32())])
 class Spikes(td.Record):
     __record_name__ = "Spikes"
 
-    class Spec(td.Spec):
-        n_units: int = 1000
-        n_seconds: int = 20
-        seed: int = 0
-
-    def build(self, spec):
-        rng = np.random.default_rng(spec.seed)
+    def __init__(self, /, *, n_units: int = 1000, n_seconds: int = 20, seed: int = 0):
+        rng = np.random.default_rng(seed)
 
         def seconds():  # one simulated second per batch, in time order
-            for second in range(spec.n_seconds):
-                n = rng.poisson(5 * spec.n_units)
+            for second in range(n_seconds):
+                n = rng.poisson(5 * n_units)
                 times = second + np.sort(rng.random(n))
-                units = rng.integers(0, spec.n_units, n, dtype=np.int32)
+                units = rng.integers(0, n_units, n, dtype=np.int32)
                 yield pa.record_batch([times, units], schema=SCHEMA)
 
         self["spikes"] = pa.RecordBatchReader.from_batches(SCHEMA, seconds())
 
 
-spikes = Spikes.get()["spikes"]  # a pyarrow dataset; no rows read yet
+spikes = Spikes()["spikes"]  # a pyarrow dataset; no rows read yet
 window = spikes.to_table(columns=["unit"], filter=(pc.field("time") >= 2.0) & (pc.field("time") < 3.0))
 rates = np.bincount(window["unit"].to_numpy(), minlength=1000)  # spikes per unit in [2, 3) s
 assert rates.sum() == window.num_rows < spikes.count_rows()
@@ -392,22 +372,18 @@ class Retina(td.Record):
     __record_name__ = "Retina"
     dims = {"n_frames": "time"}  # this record type only
 
-    class Spec(td.Spec):
-        n_ommatidia: int = 19
-        n_frames: int = 20
-
     photoreceptors: Float[np.ndarray, "n_frames n_ommatidia"]
     frame_edges: Annotated[Float[np.ndarray, "n_frames+1=_"], td.Dims("time_edge")]
     coupling: Float[np.ndarray, "pre=n_ommatidia post=n_ommatidia"]
 
-    def build(self, spec):
+    def __init__(self, /, *, n_ommatidia: int = 19, n_frames: int = 20):
         rng = np.random.default_rng(0)
-        self.photoreceptors = rng.normal(size=(spec.n_frames, spec.n_ommatidia))
-        self.frame_edges = np.linspace(0, 1, spec.n_frames + 1)
-        self.coupling = np.eye(spec.n_ommatidia)
+        self.photoreceptors = rng.normal(size=(n_frames, n_ommatidia))
+        self.frame_edges = np.linspace(0, 1, n_frames + 1)
+        self.coupling = np.eye(n_ommatidia)
 
 
-retina = Retina.get()
+retina = Retina()
 assert retina.to_xarray("photoreceptors").dims == ("time", "ommatidium")
 assert retina.to_xarray("frame_edges").dims == ("time_edge",)
 assert retina.to_xarray("coupling").dims == ("pre", "post")
@@ -415,35 +391,36 @@ assert retina.to_xarray("coupling").dims == ("pre", "post")
 
 ## Composing records
 
-A record can depend on other records in two ways. **Inputs** pass finished records to `get` as
-keyword arguments; `build` receives them, and each enters the key by its type and key.
-**Nested specs** put the upstream record's spec inside the downstream spec; `build` gets or
-builds the upstream record itself, and the upstream spec fields enter the key. Either way, a
-change upstream gives the downstream record a new key, at any depth.
+A record can depend on other records in two ways. **Inputs** pass finished records as
+positional-only `__init__` arguments; each enters the key by its type and key. **Nested specs**
+put the upstream record's spec among the downstream settings; `__init__` gets or builds the
+upstream record itself, and the upstream settings enter the key. Either way, a change upstream
+gives the downstream record a new key, at any depth.
 
 | | inputs | nested specs |
 |---|---|---|
 | upstream enters the key as | its key (opaque) | its hashed spec fields |
-| query by upstream settings | no: filter the upstream type, then `get` with its records | `Cluster.query(points__seed=1)` |
-| upstream may itself take arrays or records as inputs | yes | no: it must be buildable from its spec alone |
-| who builds the upstream record | the caller, before `get` | `build`, on demand |
-| navigate from a finished record | `record.inputs`, `record.lineage()` | `record.spec.points`, then `Points.get(...)` |
+| query by upstream settings | no: filter the upstream type, then pass its records | `Spread.query(points__seed=1)` |
+| upstream may itself take arrays or records as inputs | yes | no: it must be buildable from its settings alone |
+| who builds the upstream record | the caller, before the call | `__init__`, on demand |
+| navigate from a finished record | `record.inputs`, `record.lineage()` | `record.spec.points`, then `Points(**record.spec.points)` |
 
 Use nested specs when the upstream record is cheap to describe by its settings and you want to
 query by them; use inputs when the upstream record has inputs of its own, is built elsewhere,
-or should stay a separate unit of work. A spec field may also hold a record (`points: Points`):
-it enters the key like an input, is stored with its path and reopens as a record from
-`_meta.json`.
+or should stay a separate unit of work. A setting may also hold a record (`points: Points`
+after `*`): it enters the key like an input, is stored with its path and reopens as a record
+from `_meta.json`.
 
 ### Inputs
 
-Keyword arguments to `get` beyond the spec are inputs: records enter by type and key, arrays by
-digest, other values by canonical form. `_meta.json` also stores the path of each input record,
+Positional-only `__init__` parameters are inputs: records enter by type and key, arrays by
+digest, other values by canonical form, each by its position, so renaming an input parameter
+keeps every key. `_meta.json` also stores the path of each input record,
 so a finished record can reopen its inputs (`record.inputs`) and walk its whole upstream graph
 (`record.lineage()`, each record once, upstream first). An input record that is no longer at its
 stored path is looked up under its type's current root, so a copied root keeps its links once
-it is the root in use; a deleted one reopens as an `absent` handle. `get` refuses to build when
-an input record (or a record in a spec field) is not `done`, and names it.
+it is the root in use; a deleted one reopens as an `absent` handle. A call refuses to build when
+an input record (or a record among the settings) is not `done`, and names it.
 
 ```python
 import numpy as np
@@ -457,33 +434,25 @@ td.set_root("results")
 class Points(td.Record):
     __record_name__ = "Points"
 
-    class Spec(td.Spec):
-        n_points: int = 300
-        seed: int = 0
-
     xy: Float[np.ndarray, "n_points n_dims"]
 
-    def build(self, spec):
-        self.xy = np.random.default_rng(spec.seed).normal(size=(spec.n_points, 2))
+    def __init__(self, /, *, n_points: int = 300, seed: int = 0):
+        self.xy = np.random.default_rng(seed).normal(size=(n_points, 2))
 
 
 class Cluster(td.Record):
     __record_name__ = "Cluster"
 
-    class Spec(td.Spec):
-        n_clusters: int = 3
-        n_iterations: int = 10
-
     centres: Float[np.ndarray, "n_clusters n_dims"]
     labels: Int[np.ndarray, "n_points"]
 
-    def build(self, spec, points: Points, weights: np.ndarray | None = None):
+    def __init__(self, points: Points, weights: np.ndarray | None = None, /, *, n_clusters: int = 3, n_iterations: int = 10):
         xy = points.xy
         w = np.ones(len(xy)) if weights is None else weights
-        centres = xy[: spec.n_clusters].copy()
-        for _ in range(spec.n_iterations):
+        centres = xy[: n_clusters].copy()
+        for _ in range(n_iterations):
             labels = np.argmin(((xy[:, None] - centres[None]) ** 2).sum(-1), axis=1)
-            centres = np.stack([np.average(xy[labels == k], axis=0, weights=w[labels == k]) for k in range(spec.n_clusters)])
+            centres = np.stack([np.average(xy[labels == k], axis=0, weights=w[labels == k]) for k in range(n_clusters)])
         self.centres, self.labels = centres, labels
 
 
@@ -492,35 +461,36 @@ class Score(td.Record):
 
     inertia: float
 
-    def build(self, spec, cluster: Cluster, points: Points):
+    def __init__(self, cluster: Cluster, points: Points, /):
         d = points.xy - cluster.centres[cluster.labels]
         self.inertia = float((d**2).sum())
 
 
-points = Points.get()
-fit = Cluster.get(Cluster.Spec(n_clusters=3), points=points)  # builds
-assert Cluster.get({"n_clusters": 3}, points=Points.get()).key == fit.key  # reopens
-assert Cluster.compute_key({"n_clusters": 3}, points=points) == fit.key  # no filesystem access
-weighted = Cluster.get({"n_clusters": 3}, points=points, weights=np.linspace(0.5, 1.5, 300))
+points = Points()
+fit = Cluster(points, n_clusters=3)  # builds
+assert Cluster(Points(), n_clusters=3).key == fit.key  # reopens
+assert Cluster.compute_key(points, n_clusters=3) == fit.key  # no filesystem access
+weighted = Cluster(points, np.linspace(0.5, 1.5, 300), n_clusters=3)
 assert weighted.key != fit.key  # the array entered the key by digest
-assert fit.meta["inputs"]["points"] == {"__record__": "Points", "key": points.key}
-assert Cluster.lookup({"n_clusters": 3}, points=Points.locate({"seed": 1})) is None  # never built
+assert fit.meta["inputs"][0] == {"__record__": "Points", "key": points.key}
+assert Cluster.lookup(Points.locate(seed=1), n_clusters=3) is None  # never built
 
-score = Score.get(cluster=fit, points=points)
-assert score.inputs["cluster"] == fit and score.inputs["cluster"].centres.shape == (3, 2)
-assert weighted.inputs["weights"] == td.Digest.of(np.linspace(0.5, 1.5, 300))
+score = Score(fit, points)
+assert score.inputs[0] == fit and score.inputs[0].centres.shape == (3, 2)
+assert weighted.inputs[1] == td.Digest.of(np.linspace(0.5, 1.5, 300))
 assert score.lineage() == [points, fit]  # points is reached twice, listed once
 
 try:
-    Score.get(cluster=fit, points=Points.locate({"seed": 1}))
+    Score(fit, Points.locate(seed=1))
 except ValueError as error:
     assert "input 'points'" in str(error) and "absent" in str(error)
 ```
 
 ### Nested specs
 
-A field annotated with a spec class holds that spec; a dict given for it is turned into one.
-`build` calls `get` on the upstream type with the nested spec, which reopens or builds it.
+A setting annotated with a spec class holds that spec; a dict given for it is turned into one.
+`__init__` calls the upstream type with the nested spec's settings (`Points(**points)`), which
+reopens or builds it.
 
 ```python
 import numpy as np
@@ -534,37 +504,29 @@ td.set_root("results")
 class Points(td.Record):
     __record_name__ = "Points"
 
-    class Spec(td.Spec):
-        n_points: int = 300
-        seed: int = 0
-
     xy: Float[np.ndarray, "n_points n_dims"]
 
-    def build(self, spec):
-        self.xy = np.random.default_rng(spec.seed).normal(size=(spec.n_points, 2))
+    def __init__(self, /, *, n_points: int = 300, seed: int = 0):
+        self.xy = np.random.default_rng(seed).normal(size=(n_points, 2))
 
 
 class Spread(td.Record):
     __record_name__ = "Spread"
 
-    class Spec(td.Spec):
-        points: Points.Spec = Points.Spec()
-        quantile: float = 0.9
-
     radius: float
 
-    def build(self, spec):
-        xy = Points.get(spec.points).xy
-        self.radius = float(np.quantile(np.linalg.norm(xy, axis=1), spec.quantile))
+    def __init__(self, /, *, points: Points.Spec = Points.Spec(), quantile: float = 0.9):
+        xy = Points(**points).xy
+        self.radius = float(np.quantile(np.linalg.norm(xy, axis=1), quantile))
 
 
 for seed in (0, 1):
-    Spread.get({"points": {"seed": seed}})  # the dict becomes a Points.Spec
+    Spread(points={"seed": seed})  # the dict becomes a Points.Spec
 
-spread = Spread.get(Spread.Spec(points=Points.Spec(seed=1)))
+spread = Spread(points=Points.Spec(seed=1))
 assert isinstance(spread.spec.points, Points.Spec) and spread.spec.points.seed == 1
-assert len(Spread.query(points__seed=1)) == 1  # queryable by upstream fields
-assert Points.lookup(spread.spec.points) is not None  # the upstream record, from the spec
+assert len(Spread.query(points__seed=1)) == 1  # queryable by upstream settings
+assert Points.lookup(**spread.spec.points) is not None  # the upstream record, from the spec
 assert spread.lineage() == []  # records a build gets itself are not recorded
 ```
 
@@ -575,7 +537,7 @@ form therefore adds the time of its last edit, `modified`: each edit gives recor
 a new key, so `get` builds afresh instead of returning a result computed from the old contents,
 and the old result stays under its old key. The time is read when the key is computed; an edit
 made while a downstream build runs is not noticed. The same holds for a workspace record in a
-spec field or passed to a `cached_method`.
+setting or passed to a `cached_method`.
 
 ```python
 import numpy as np
@@ -595,15 +557,15 @@ class Best(td.Record):
 
     loss: float
 
-    def build(self, spec, losses: Losses):
+    def __init__(self, losses: Losses, /):
         self.loss = float(losses.load("loss").min())
 
 
-losses = Losses.get()
+losses = Losses()
 losses.append("loss", np.array([3.0, 2.0]))
-assert Best.get(losses=losses).loss == 2.0
+assert Best(losses).loss == 2.0
 losses.append("loss", np.array([1.0]))
-assert Best.get(losses=losses).loss == 1.0  # a new key, built from the new contents
+assert Best(losses).loss == 1.0  # a new key, built from the new contents
 ```
 
 ## Views that rebuild domain objects
@@ -641,24 +603,18 @@ class Network(td.Record):
     __record_name__ = "Network"
     in_place = True  # readers see checkpoints while training runs
 
-    class Spec(td.Spec):
-        net: Net = td.field(default_factory=Net)
-        n_steps: int = 60
-        checkpoint_every: int = 20
-        seed: int = 0
-
-    def build(self, spec):
-        torch.manual_seed(spec.seed)
-        model = make_model(spec.net)
+    def __init__(self, /, *, net: Net = Net(), n_steps: int = 60, checkpoint_every: int = 20, seed: int = 0):
+        torch.manual_seed(seed)
+        model = make_model(net)
         x = torch.linspace(-1, 1, 64)[:, None]
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-        for step in range(1, spec.n_steps + 1):
+        for step in range(1, n_steps + 1):
             optimizer.zero_grad()
             loss = torch.nn.functional.mse_loss(model(x), torch.sin(3 * x))
             loss.backward()
             optimizer.step()
             self.append("loss", [loss.item()])
-            if step % spec.checkpoint_every == 0:
+            if step % checkpoint_every == 0:
                 self[f"chkpt_{step:05d}"] = model  # built-in codec: the state dict as safetensors
                 self.append("chkpt_step", [step])
 
@@ -684,7 +640,7 @@ class NetworkView(td.View):
         return self.memory.cache(compute_responses, ignore=["batch_size"])(self, x, step, batch_size)
 
 
-view = NetworkView(Network.get())
+view = NetworkView(Network())
 x = np.linspace(-1, 1, 101)
 cached = view.memory.cache(compute_responses, ignore=["batch_size"])
 assert view.needs_compute(cached, view, x, None, 64)
@@ -694,19 +650,20 @@ assert view.network() is view.network()  # cached per view and arguments
 assert not torch.equal(view.network(20)[0].weight, view.network()[0].weight)
 assert list(view.record.load("chkpt_step")) == [20, 40, 60]
 
-ensemble = td.Collection(Network.get({"seed": seed}) for seed in range(3))
+ensemble = td.Collection(Network(seed=seed) for seed in range(3))
 stacked = ensemble.map(lambda record: NetworkView(record).responses(x), dim="network", coords=["seed"])
 assert stacked.dims == ("network", "stimulus") and list(stacked["seed"].values) == [0, 1, 2]
 ```
 
-## Classes that own a record
+## Records that change after the build
 
-`@td.record` keeps your class as it is and adds a workspace record keyed by its `__init__`
-arguments (see [Design](design.md#classes-that-own-a-record) for the exact rules). The first
-construction is the build: `__init__` runs under the record's lease (status `running`; other
-processes constructing the same spec wait), and the record is `done` when it returns. Methods
-keep writing to it afterwards. Spec fields become attributes; assigning one moves later writes
-to the record for the new spec.
+A workspace record (`mutable = True`) accepts writes after its build. Its `__init__` is the
+build: it runs under the record's lease (status `running`; other processes constructing the same
+settings wait), and the record is `done` when it returns. Methods keep writing to it afterwards;
+each edit takes the lease briefly and stamps `modified`. Calling the class again with the same
+settings reopens the record without running `__init__`, so methods can skip finished work.
+Private names (`self._model`) are plain Python attributes; every other attribute written on a
+record is a stored field.
 
 ```python
 # requires: torch safetensors
@@ -719,52 +676,53 @@ import tensordir as td
 td.set_root("results")
 
 
-@td.record
-class Trainer:
+class Trainer(td.Record):
+    mutable = True
+
     def __init__(
         self,
+        /,
+        *,
         lr: float = 1e-2,
         n_hidden: int = 16,
         seed: int = 0,
-        device: Annotated[str, td.field(hashed=False)] = "cpu",  # not in the key
+        device: Annotated[str, td.field(hashed=False)] = "cpu",  # in the spec, not in the key
         verbose: Annotated[bool, td.transient] = False,  # not in the spec at all
     ):
-        self.verbose = verbose
+        self.config = {"verbose": verbose}
 
     def train(self, n_steps: int = 40) -> float:
-        if "summary" in self.record:  # finished earlier, maybe by another process
-            return self.record.summary["final_loss"]
-        torch.manual_seed(self.seed)
-        model = torch.nn.Sequential(torch.nn.Linear(1, self.n_hidden), torch.nn.Tanh(), torch.nn.Linear(self.n_hidden, 1))
-        optimizer = torch.optim.Adam(model.parameters(), lr=self.lr)
+        if "summary" in self:  # finished earlier, maybe by another process
+            return self.summary["final_loss"]
+        spec = self.spec
+        torch.manual_seed(spec.seed)
+        model = torch.nn.Sequential(torch.nn.Linear(1, spec.n_hidden), torch.nn.Tanh(), torch.nn.Linear(spec.n_hidden, 1))
+        optimizer = torch.optim.Adam(model.parameters(), lr=spec.lr)
         x = torch.linspace(-1, 1, 64)[:, None]
         for _ in range(n_steps):
             optimizer.zero_grad()
             loss = torch.nn.functional.mse_loss(model(x), torch.sin(3 * x))
             loss.backward()
             optimizer.step()
-            self.record.append("loss", [loss.item()])
-        self.record.model = model  # state dict as safetensors
-        self.record.summary = {"final_loss": loss.item()}
+            self.append("loss", [loss.item()])
+        self.model = model  # state dict as safetensors
+        self.summary = {"final_loss": loss.item()}
         return loss.item()
 
 
 trainer = Trainer(verbose=True)
-assert trainer.record.status == "done"  # built by __init__
+assert trainer.status == "done"  # built by __init__
 first = trainer.train()  # writes after the build: still done, `modified` updated
-assert trainer.record.meta["modified"] is not None
-assert Trainer().train() == first  # same spec: reopened, not retrained
+assert trainer.meta["modified"] is not None
+assert Trainer().train() == first  # same settings: reopened, not retrained
 
-trainer.lr = 3e-2  # a new spec: the next writes go to a new record
-trainer.train()
-assert trainer.record.spec.lr == 3e-2
-
-table = Trainer.Record.query().table(sizes=False, varying_only=True)
+Trainer(lr=3e-2).train()  # other settings: another record
+table = Trainer.query().table(sizes=False, varying_only=True)
 assert sorted(table["spec.lr"]) == [1e-2, 3e-2]
-assert len(Trainer.Record.query(lr=1e-2).where(lambda r: "model" in r)) == 1
+assert len(Trainer.query(lr=1e-2).where(lambda r: "model" in r)) == 1
 ```
 
-The same without the decorator: give an ordinary record class `mutable = True` and hold it.
+A class that should not be a record itself holds one instead:
 
 ```python
 import numpy as np
@@ -778,13 +736,13 @@ class Run(td.Record):
     __record_name__ = "Run"
     mutable = True  # fields may change after the (empty) build
 
-    class Spec(td.Spec):
-        lr: float = 0.1
+    def __init__(self, /, *, lr: float = 0.1):
+        pass
 
 
 class Solver:
     def __init__(self, lr: float):
-        self.record = Run.get({"lr": lr})  # or Run.at(path, {"lr": lr}) for a hand-named directory
+        self.record = Run(lr=lr)  # or Run.at(path, lr=lr) for a hand-named directory
 
     def step(self, losses):
         self.record.losses = np.asarray(losses)
@@ -792,7 +750,7 @@ class Solver:
 
 solver = Solver(0.1)
 solver.step([1.0, 0.5])
-assert list(Run.get({"lr": 0.1}).load("losses")) == [1.0, 0.5]
+assert list(Run(lr=0.1).load("losses")) == [1.0, 0.5]
 del solver.record.losses
 assert "losses" not in solver.record
 ```
@@ -830,29 +788,25 @@ write_deltalake("synapses", synapses(2000, 0))  # e.g. gs://.../synapses_pni_2/p
 class Edges(td.Record):
     __record_name__ = "Edges"
 
-    class Spec(td.Spec):
-        synapses: td.DeltaRef
-        min_size: int = 0
-
-    def build(self, spec):
-        table = spec.synapses.to_table(  # only these columns and rows are read
-            columns=["pre_pt_root_id", "post_pt_root_id", "size"], filter={"size": f">={spec.min_size}"}
+    def __init__(self, /, *, synapses: td.DeltaRef, min_size: int = 0):
+        table = synapses.to_table(  # only these columns and rows are read
+            columns=["pre_pt_root_id", "post_pt_root_id", "size"], filter={"size": f">={min_size}"}
         )
         self["edges"] = table.group_by(["pre_pt_root_id", "post_pt_root_id"]).aggregate(
             [("size", "count"), ("size", "sum")]
         )
-        spec.synapses.materialize(self, "large", filter={"size": ">=400"})  # a local parquet copy
+        synapses.materialize(self, "large", filter={"size": ">=400"})  # a local parquet copy
 
 
 snapshot = td.DeltaRef("synapses")  # pins the current version (0); or version=0 explicitly
-edges = Edges.get({"synapses": snapshot, "min_size": 50})
+edges = Edges(synapses=snapshot, min_size=50)
 assert edges.spec.synapses.version == 0
 assert edges.load("edges").column_names == ["pre_pt_root_id", "post_pt_root_id", "size_count", "size_sum"]
 assert edges["large"].count_rows() == snapshot.to_table(filter={"size": ">=400"}).num_rows  # lazy dataset
 
 write_deltalake("synapses", synapses(500, 1), mode="append")  # the export moves on: version 1
-assert Edges.lookup({"synapses": td.DeltaRef("synapses"), "min_size": 50}) is None  # new snapshot, new key
-assert Edges.get({"synapses": snapshot, "min_size": 50}) == edges  # the pinned snapshot reopens
+assert Edges.lookup(synapses=td.DeltaRef("synapses"), min_size=50) is None  # new snapshot, new key
+assert Edges(synapses=snapshot, min_size=50) == edges  # the pinned snapshot reopens
 print(Edges.query().table(sizes=False)[["key", "spec.synapses", "spec.min_size"]])
 ```
 

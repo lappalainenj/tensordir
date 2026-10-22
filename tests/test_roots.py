@@ -22,11 +22,8 @@ def clean_roots(monkeypatch, tmp_path):
 class Plain(td.Record):
     __record_name__ = "RootsPlain"
 
-    class Spec(td.Spec):
-        n: int = 3
-
-    def build(self, spec):
-        self["values"] = np.arange(spec.n)
+    def __init__(self, /, *, n: int = 3):
+        self["values"] = np.arange(n)
 
 
 def _classes(tmp_path):
@@ -34,23 +31,17 @@ def _classes(tmp_path):
         __record_name__ = "RootsConnectome"
         root = "connectomes"  # relative: joined onto the base root on every access
 
-        class Spec(td.Spec):
-            n: int = 3
-
-        def build(self, spec):
+        def __init__(self, /, *, n: int = 3):
             lock = self.resolve_root() / INTERNAL / "locks" / self.path.parent.name / self.path.name
             self["lock_seen"] = lock.is_dir()
-            self["values"] = np.arange(spec.n)
+            self["values"] = np.arange(n)
 
     @td.root(tmp_path / "datasets")  # absolute: the base root does not matter
     class Dataset(td.Record):
         __record_name__ = "RootsDataset"
 
-        class Spec(td.Spec):
-            n: int = 3
-
-        def build(self, spec):
-            self["values"] = np.arange(spec.n)
+        def __init__(self, /, *, n: int = 3):
+            self["values"] = np.arange(n)
 
     return Connectome, Dataset
 
@@ -109,13 +100,13 @@ def test_relative_class_root_follows_use_root(tmp_path, clean_roots):
     Connectome, Dataset = _classes(tmp_path)
     for base in ("one", "two"):
         with td.use_root(tmp_path / base):
-            record = Connectome.get({"n": 2})
+            record = Connectome.get(n=2)
             assert record.path.parents[1] == tmp_path / base / "connectomes"
             assert record.lock_seen  # the lease lives under the class's resolved root
             assert [r.spec.n for r in Connectome.query()] == [2]
             assert td.reindex(Connectome) == tmp_path / base / "connectomes" / INTERNAL / "index.parquet"
             assert len(Connectome.query(n=2)) == 1  # served from that root's index
-            Dataset.get({"n": 5})
+            Dataset.get(n=5)
     assert len(Dataset.query()) == 1  # one absolute root for both blocks
     assert len(Connectome.query()) == 0  # cwd/connectomes holds nothing
     assert len(Connectome.query(root=tmp_path / "one" / "connectomes")) == 1
@@ -169,16 +160,18 @@ def test_decorator_inheritance_and_removal(tmp_path, clean_roots):
         td.get_root(object)
 
 
-def test_owner_classes_and_cli(tmp_path, clean_roots, monkeypatch, capsys):
-    @td.record(root="runs")
-    class Trainer:
-        def __init__(self, lr: float = 0.1):
+def test_workspace_classes_and_cli(tmp_path, clean_roots, monkeypatch, capsys):
+    @td.root("runs")
+    class Trainer(td.Record):
+        mutable = True
+
+        def __init__(self, /, *, lr: float = 0.1):
             pass
 
     monkeypatch.setenv("TENSORDIR_ROOT", str(tmp_path / "data"))
-    assert td.get_root(Trainer) == td.get_root(Trainer.Record) == tmp_path / "data" / "runs"
-    assert Trainer().record.path.parents[1] == tmp_path / "data" / "runs"
-    assert len(Trainer.Record.query()) == 1
+    assert td.get_root(Trainer) == tmp_path / "data" / "runs"
+    assert Trainer().path.parents[1] == tmp_path / "data" / "runs"
+    assert len(Trainer.query()) == 1
     assert td.reindex(Trainer).parents[1] == tmp_path / "data" / "runs"
     main(["--root", "runs", "ls"])  # joined onto $TENSORDIR_ROOT like a class root
     assert len(capsys.readouterr().out.splitlines()) == 1

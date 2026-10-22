@@ -1,6 +1,8 @@
+import hashlib
 import json
 import pickle
 import threading
+from typing import Annotated
 
 import numpy as np
 import pytest
@@ -12,24 +14,74 @@ from _records import Square
 
 
 def test_get_builds_once_then_reopens(root, monkeypatch):
-    spec = Square.Spec(n=4)
-    assert Square.locate(spec).status == "absent"
-    assert Square.lookup(spec) is None
-    rec = Square.get(spec)
+    assert Square.locate(n=4).status == "absent"
+    assert Square.lookup(n=4) is None
+    rec = Square(n=4)  # calling the type is get()
     assert rec.status == "done"
     np.testing.assert_array_equal(rec.values, [0, 1, 4, 9])
 
-    def boom(self, spec):
+    def boom(self, **settings):
         raise AssertionError("rebuilt")
 
-    monkeypatch.setattr(Square, "build", boom)
-    again = Square.get({"n": 4})
+    monkeypatch.setattr(Square, "__init__", boom)
+    again = Square.get(n=4)
     assert again == rec and again.path == rec.path
-    assert Square.lookup(spec) == rec
+    assert Square.lookup(**Square.Spec(n=4)) == rec  # a spec passes its settings with **
+
+
+def test_init_signature_is_the_interface():
+    class Fit(td.Record):
+        def __init__(
+            self,
+            points: np.ndarray,
+            weights: np.ndarray | None = None,
+            /,
+            *,
+            k: int,
+            lr: float = 0.1,
+            device: Annotated[str, td.field(hashed=False)] = "cpu",
+            log: Annotated[list | None, td.transient] = None,
+        ):
+            pass
+
+    assert [f for f in Fit.Spec.__dataclass_fields__] == ["k", "lr", "device"]
+    assert Fit._interface.inputs == ("points", "weights") and Fit._interface.transients == ("log",)
+    x = np.ones(3)
+    assert Fit.compute_key(x, k=2) == Fit.compute_key(x, None, k=2, lr=0.1, device="gpu", log=[])
+    assert Fit.compute_key(x, k=2) != Fit.compute_key(x, x, k=2)
+    with pytest.raises(TypeError):
+        Fit.compute_key(points=x, k=2)  # inputs are positional-only
+    with pytest.raises(TypeError):
+        Fit.compute_key(x, 2)  # settings are keyword-only
+
+    for bad in ("def __init__(self, x): pass", "def __init__(self, *, root=None): pass",
+                "def __init__(self, **kwargs): pass"):
+        namespace = {}
+        exec(bad, namespace)
+        with pytest.raises(TypeError):
+            type("Bad", (td.Record,), {"__init__": namespace["__init__"]})
+    with pytest.raises(TypeError, match="Spec is generated"):
+        type("Declared", (td.Record,), {"Spec": type("Spec", (td.Spec,), {})})
+
+
+def test_renaming_an_input_keeps_the_key():
+    class Before(td.Record):
+        __record_name__ = "Renamed"
+
+        def __init__(self, points, /, *, k: int = 1):
+            pass
+
+    class After(td.Record):
+        __record_name__ = "Renamed"
+
+        def __init__(self, xy, /, *, k: int = 1):
+            pass
+
+    assert Before.compute_key([1, 2]) == After.compute_key([1, 2])
 
 
 def test_layout_and_metadata(root):
-    rec = Square.get(Square.Spec(n=3, scale=2.0))
+    rec = Square(n=3, scale=2.0)
     assert rec.path == root / "Square" / rec.key[:16]
     meta = json.loads((rec.path / "_meta.json").read_text())
     assert meta["key"] == rec.key and len(rec.key) == 64
@@ -56,22 +108,22 @@ def test_builds_classes_defined_in_a_notebook(root, monkeypatch):
         __record_name__ = "Notebook"
         __module__ = "__main__"
 
-        def build(self, spec):
+        def __init__(self):
             self.x = np.arange(3)
 
-    rec = Notebook.get()
+    rec = Notebook()
     assert rec.status == "done" and rec.meta["provenance"]["git"] is None
 
 
 def test_unhashed_fields_share_the_record(root):
-    a = Square.get(Square.Spec(n=2, device="cpu"))
-    b = Square.get(Square.Spec(n=2, device="cuda"))
+    a = Square(n=2, device="cpu")
+    b = Square(n=2, device="cuda")
     assert a.path == b.path
     assert b.spec.device == "cuda" and b.meta["spec"]["device"] == "cpu"
 
 
 def test_lazy_and_eager_reads(root):
-    rec = Square.get({"n": 5})
+    rec = Square(n=5)
     handle = rec["values"]
     assert isinstance(handle, zarr.Array) and handle.metadata.dimension_names == ("point",)
     assert isinstance(rec.values, np.ndarray) and isinstance(rec.load("values"), np.ndarray)
@@ -83,8 +135,8 @@ def test_lazy_and_eager_reads(root):
         rec.missing
 
 
-def test_writes_outside_build_are_rejected(root):
-    rec = Square.get({"n": 2})
+def test_writes_outside_the_build_are_rejected(root):
+    rec = Square(n=2)
     with pytest.raises(td.ReadOnlyError):
         rec["x"] = 1
     with pytest.raises(td.ReadOnlyError):
@@ -96,7 +148,7 @@ class Flaky(td.Record):
     calls = 0
     fail = True
 
-    def build(self, spec):
+    def __init__(self):
         type(self).calls += 1
         self["partial"] = 1
         if type(self).fail:
@@ -123,7 +175,7 @@ def test_failure_is_recorded_and_retried_on_request(root):
 class Interrupted(td.Record):
     __record_name__ = "Interrupted"
 
-    def build(self, spec):
+    def __init__(self):
         self["x"] = 1
         raise KeyboardInterrupt
 
@@ -137,14 +189,14 @@ def test_interrupt_leaves_no_record(root):
 
 def test_hand_named_directories(tmp_path):
     path = tmp_path / "my-run"
-    rec = Square.at(path, Square.Spec(n=3))
+    rec = Square.at(path, n=3)
     assert rec.path == path and rec.status == "done"
     reopened = td.Record.at(path)
     assert type(reopened) is Square and reopened.key == rec.key
     np.testing.assert_array_equal(reopened.values, [0, 1, 4])
-    assert Square.at(path, {"n": 3}) == rec
+    assert Square.at(path, n=3) == rec
     with pytest.raises(td.KeyCollision):
-        Square.at(path, {"n": 4})
+        Square.at(path, n=4)
     with pytest.raises(FileNotFoundError):
         td.Record.at(tmp_path / "nothing")
 
@@ -152,25 +204,22 @@ def test_hand_named_directories(tmp_path):
 class Downstream(td.Record):
     __record_name__ = "Downstream"
 
-    class Spec(td.Spec):
-        offset: float = 0.0
-
     total: float
 
-    def build(self, spec, source, weights):
-        self["total"] = float(source.values.sum() + weights.sum() + spec.offset)
+    def __init__(self, source, weights, /, *, offset: float = 0.0):
+        self["total"] = float(source.values.sum() + weights.sum() + offset)
 
 
 def test_inputs_enter_the_key(root):
-    source = Square.get({"n": 3})
+    source = Square(n=3)
     w = np.ones(2)
-    rec = Downstream.get(source=source, weights=w)
+    rec = Downstream(source, w)
     assert rec.total == 0 + 1 + 4 + 2
-    assert rec.meta["inputs"]["source"] == {"__record__": "Square", "key": source.key}
-    assert rec.meta["inputs"]["weights"] == {"__digest__": td.Digest.of(w).sha256}
-    assert Downstream.lookup(source=source, weights=w * 2) is None
-    assert Downstream.lookup(source=Square.get({"n": 4}), weights=w) is None
-    assert Downstream.lookup(source=source, weights=w.copy()) == rec
+    assert rec.meta["inputs"][0] == {"__record__": "Square", "key": source.key}
+    assert rec.meta["inputs"][1] == {"__digest__": td.Digest.of(w).sha256}
+    assert Downstream.lookup(source, w * 2) is None
+    assert Downstream.lookup(Square(n=4), w) is None
+    assert Downstream.lookup(source, w.copy()) == rec
 
 
 def test_schema_version_changes_keys(root):
@@ -203,7 +252,7 @@ def test_implicit_type_ids_collide_across_modules():
 
 
 def test_pickle_reopens_by_identity(root):
-    rec = Square.get({"n": 3})
+    rec = Square(n=3)
     back = pickle.loads(pickle.dumps(rec))
     assert back == rec and type(back) is Square and back.status == "done"
     np.testing.assert_array_equal(back.values, rec.values)
@@ -212,68 +261,60 @@ def test_pickle_reopens_by_identity(root):
 def test_root_resolution(tmp_path, monkeypatch):
     monkeypatch.delenv("TENSORDIR_ROOT", raising=False)
     monkeypatch.chdir(tmp_path)
-    assert Square.locate({"n": 1}).path.parent.parent == tmp_path  # the working directory
+    assert Square.locate(n=1).path.parent.parent == tmp_path  # the working directory
     monkeypatch.setenv("TENSORDIR_ROOT", str(tmp_path / "env"))
-    assert Square.locate({"n": 1}).path.parent.parent == tmp_path / "env"
+    assert Square.locate(n=1).path.parent.parent == tmp_path / "env"
     td.set_root(tmp_path / "default")
     try:
         assert td.get_root() == tmp_path / "default"
         with td.use_root(tmp_path / "ctx"):
-            assert Square.locate({"n": 1}).path.parent.parent == tmp_path / "ctx"
-        assert Square.locate({"n": 1}, root=tmp_path / "arg").path.parent.parent == tmp_path / "arg"
+            assert Square.locate(n=1).path.parent.parent == tmp_path / "ctx"
+        assert Square.locate(n=1, root=tmp_path / "arg").path.parent.parent == tmp_path / "arg"
     finally:
         td.set_root(None)
 
 
 def test_golden_record_key():
-    key = Square.compute_key({"n": 3, "scale": 0.5})
-    assert key == GOLDEN_SQUARE
-    assert Downstream.compute_key(source=None, weights=np.arange(4, dtype="<f8")) == GOLDEN_DOWNSTREAM
+    payload = b'{"inputs":[],"schema_version":0,"spec":{"n":3,"scale":0.5},"type":"Square"}'
+    assert GOLDEN_SQUARE == hashlib.sha256(payload).hexdigest()
+    assert Square.compute_key(n=3, scale=0.5) == GOLDEN_SQUARE
+    assert Downstream.compute_key(None, np.arange(4, dtype="<f8")) == GOLDEN_DOWNSTREAM
 
 
-# sha256(b'{"inputs":{},"schema_version":0,"spec":{"n":3,"scale":0.5},"type":"Square"}')
-GOLDEN_SQUARE = "c50bf504a8e3912e0b13741d84245a9eedbb048f0ef657c0872d6c73fd206f9b"
-GOLDEN_DOWNSTREAM = "fd41344e64ecb991831c17d0c05069dc988282cc6670ef9ba8caaf3506728fc8"
+GOLDEN_SQUARE = "fd11f33c10a909bffc78c1ba9022781923e3b12cd661386b0daa2097326367c7"
+GOLDEN_DOWNSTREAM = "1024655e4800dbe1fec680f3eb9598ae199b02a9eccef31fdc323bffed327465"
 
 
 class Typed(td.Record):
     __record_name__ = "Typed"
 
-    class Spec(td.Spec):
-        n_a: int = 2
-        n_b: int = 2
-        dtype: str = "float64"
-
     x: Float[np.ndarray, "n_cells n_dims"]
     y: Int[np.ndarray, "n_cells"]
 
-    def build(self, spec):
-        self.x = np.zeros((spec.n_a, 3), dtype=spec.dtype)
-        self.y = np.arange(spec.n_b)
+    def __init__(self, /, *, n_a: int = 2, n_b: int = 2, dtype: str = "float64"):
+        self.x = np.zeros((n_a, 3), dtype=dtype)
+        self.y = np.arange(n_b)
 
 
 def test_typed_fields_are_checked(root):
-    rec = Typed.get()
+    rec = Typed()
     assert rec.meta["fields"]["x"]["dims"] == ["cell", "dim"]
     with pytest.raises(td.BuildFailed, match="DimsError: dimension 'cell'"):
-        Typed.get({"n_b": 3})
+        Typed(n_b=3)
     with pytest.raises(td.BuildFailed, match="TypeError"):
-        Typed.get({"dtype": "int64"})
+        Typed(dtype="int64")
 
 
 def test_invalid_field_names(root):
     class Bad(td.Record):
         __record_name__ = "Bad"
 
-        class Spec(td.Spec):
-            name: str
-
-        def build(self, spec):
-            self[spec.name] = 1
+        def __init__(self, /, *, name: str):
+            self[name] = 1
 
     for name in ["../x", "_hidden", ".dot", "a/b", "x.lock"]:
         with pytest.raises(td.BuildFailed, match="invalid field name"):
-            Bad.get({"name": name})
+            Bad(name=name)
 
 
 class Training(td.Record):
@@ -284,7 +325,7 @@ class Training(td.Record):
 
     loss: Float[np.ndarray, "n_iterations"]
 
-    def build(self, spec):
+    def __init__(self):
         for i in range(3):
             self.append("loss", np.array([1.0 / (i + 1)]))
             if i == 1:
@@ -310,6 +351,6 @@ def test_in_place_builds_expose_partial_logs(root):
 
 
 def test_delete(root):
-    rec = Square.get({"n": 2})
+    rec = Square(n=2)
     rec.delete()
     assert rec.status == "absent" and not rec.path.exists()

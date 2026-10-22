@@ -5,7 +5,7 @@
 A record's key is the sha256 of the canonical JSON of
 
 ```json
-{"inputs": {...}, "schema_version": 0, "spec": {...}, "type": "Fit"}
+{"inputs": [...], "schema_version": 0, "spec": {...}, "type": "Fit"}
 ```
 
 - `type` is `__record_name__`, else the class's qualified name without its module, so moving a
@@ -13,18 +13,22 @@ A record's key is the sha256 of the canonical JSON of
   no `__record_name__` raise `TypeError`; set `__record_name__` on one of them, or to keep keys
   across a class rename.
 - `schema_version` is a class attribute. Bump it when a recipe change invalidates old results.
-- `spec` holds the hashed fields of the spec. Canonical JSON sorts keys, turns numpy scalars into
+- `spec` holds the hashed settings: the keyword-only `__init__` parameters, as the generated
+  `Fit.Spec`. Canonical JSON sorts keys, turns numpy scalars into
   Python scalars and paths into POSIX strings, writes floats in their shortest round-trip form,
   maps -0.0 to 0.0, tags infinities, rejects NaN, and accepts arrays only through `Digest`. A float
   field given an int is stored as a float, so `lr=1` and `lr=1.0` share a key.
-- `inputs` are the keyword arguments of `get` beyond the spec. Records enter by type and key,
+- `inputs` are the positional-only `__init__` arguments, by position: renaming an input
+  parameter keeps every key, reordering inputs changes them. Records enter by type and key,
   arrays by digest, and other values by canonical form. A workspace record also enters with the
   time of its last edit (see [Workspace records as inputs](extending.md#workspace-records-as-inputs)).
   Paths never enter the key; `_meta.json` stores the path of every input record under
-  `upstream`, and a record in a spec field with its path, so both can be reopened.
+  `upstream`, and a record among the settings with its path, so both can be reopened.
 
-Spec class names don't enter the key, so renaming a spec class is free. Two field options
-control the key:
+Parameter names of inputs and the name of a record's class (when `__record_name__` is set) don't
+enter the key. Two field options control the key, given as a parameter default
+(`device: str = td.field("cpu", hashed=False)`) or in the annotation
+(`device: Annotated[str, td.field(hashed=False)] = "cpu"`):
 
 - `field(hashed=False)` keeps a field out of the key (device, worker count, batch size). The
   stored spec records the value used by the build that ran.
@@ -88,12 +92,12 @@ class, and those of tensordir's own repository when it is installed from a check
 1. Read `_meta.json`. If the status is `done`, return the record. If it is `failed`, raise
    `BuildFailed` with the stored traceback, unless `retry_failed=True`.
 2. Try to take the lease (`mkdir` of the lock directory, then `owner.json`). On success, check
-   again, run `build` in `.tensordir/tmp/...`, write `_meta.json`, and rename the directory
+   again, run `__init__` in `.tensordir/tmp/...`, write `_meta.json`, and rename the directory
    into place.
 3. Otherwise wait with exponential backoff (capped at 2 s), up to `timeout`. With `block=False`,
    raise `RecordBusy` instead.
 
-An exception in `build` stores a `failed` record with the traceback; while `retry_failed=True`
+An exception in `__init__` stores a `failed` record with the traceback; while `retry_failed=True`
 rebuilds it, its status is `running`. `KeyboardInterrupt` and `SystemExit` leave no record behind.
 
 A build that is killed outright (SIGKILL, an out-of-memory kill, a lost node) leaves no record
@@ -120,7 +124,7 @@ Python rules. Reading `record.name` returns the stored value (numpy for typed ar
 
 Who may write:
 
-| record | inside `build` | after the build is `done` |
+| record | inside `__init__` (the build) | after the build is `done` |
 |---|---|---|
 | default | yes | no: `ReadOnlyError` |
 | `in_place = True` | yes; readers see each write | no |
@@ -131,7 +135,8 @@ and inputs give the same fields. A **workspace record** (`mutable = True`) gives
 for the use datamate served: an object (a trainer, a solver) holds a record and writes losses,
 checkpoints and summaries into it over time. Rules:
 
-- Without a `build`, `get` creates an empty `done` record; edits start right away.
+- Without an `__init__`, the first call creates an empty `done` record; edits start right away.
+- Calling the class with the same settings reopens the record without running `__init__`.
 - Each edit takes the record's lease, re-reads `_meta.json`, writes the field, stores the new
   manifest atomically with a `modified` timestamp, and releases the lease. Edits from many
   handles, threads or processes therefore never lose each other's fields; the last write to the
@@ -145,56 +150,42 @@ checkpoints and summaries into it over time. Rules:
 - Array fields are written in place, so a reader can see a partly written array during an edit.
   File codecs (json, parquet, safetensors) replace their file atomically.
 
-## Classes that own a record
+## The `__init__` interface
 
-`@td.record` turns a regular class into one whose `__init__` arguments are a spec and whose
-`self.record` is a workspace record for that spec. As with datamate's `Directory.__init__`, the
-first construction is the build; unlike it, the record stays writable afterwards.
+`__init__` is the build, and its signature is the record type's interface, as datamate's
+`Directory.__init__` was. Calling the class gets the record: `Fit(points, n_columns=8)` is
+`Fit.get(points, n_columns=8)`, which reopens a finished record without running `__init__` and
+otherwise runs it once under the lease. `Fit.get` also takes the options `root`, `block`,
+`timeout` and `retry_failed`, so those names cannot be settings.
 
 ```python
-@td.record
-class Trainer:
-    def __init__(self, lr: float = 0.1, n_steps: int = 100,
+class Fit(td.Record):
+    def __init__(self, points: Points, weights: np.ndarray | None = None, /, *,
+                 n_columns: int, seed: int = 0,
                  device: Annotated[str, td.field(hashed=False)] = "cpu",
                  logger: Annotated[Logger | None, td.transient] = None):
-        self.model = make_model()
+        ...
 ```
 
-- **Spec attributes.** Every named `__init__` argument is a field of the generated `Trainer.Spec`,
-  typed by its annotation (`Any` without one), with its default. Exceptions:
-  `Annotated[T, td.transient]` arguments stay plain arguments. `*args` and `**kwargs`, and the
-  names `record`, `spec`, `Spec`, `Record`, are rejected.
-- **Key options.** `td.field(..., hashed=False)` or `since=` as the default, or inside
-  `Annotated[T, td.field(hashed=False)]`, work as in a `Spec`.
-- **Attributes.** Each spec field is a property backed by `self.spec`. `trainer.lr` reads it;
-  `trainer.lr = 0.2` (also inside `__init__`) replaces the spec with `spec.replace(lr=0.2)`. If
-  the key changes, the next `trainer.record` is the record for the new spec; earlier handles keep
-  pointing at the old record. Changing an unhashed field keeps the record.
-- **Records.** `trainer.record` is the record for `trainer.spec`, a `mutable` record type named
-  `Trainer` (or `name=`), with `root=`, `schema_version=` and a `base=` record class for typed
-  fields, `dims`, codecs or `in_place`. Its root is resolved when the object is constructed.
-- **Lifecycle.** `__init__` is the build:
+| parameter | role | enters the key |
+|---|---|---|
+| positional-only (before `/`) | an **input**: what the result is computed from | by position: records by key, arrays by digest |
+| keyword-only (after `*`) | a **setting**: a field of the generated `Fit.Spec` | by name, unless `hashed=False` or `since=` |
+| keyword-only, `Annotated[T, td.transient]` | passed to `__init__` only | no |
 
-    | moment | status | writes through `self.record` |
-    |---|---|---|
-    | construction, record not `done` | takes the lease, then `running` | go into the build, as in `Record.build` |
-    | `__init__` returns | `done` | |
-    | `__init__` raises | `failed`, traceback stored; the exception propagates | discarded |
-    | construction, record `done` | stays `done`; `__init__` runs again without the lease | edits |
-    | any time after the build | stays `done` | edits; each updates `meta["modified"]` |
+Other parameter kinds (positional-or-keyword, `*args`, `**kwargs`) raise `TypeError` when the
+class is defined, so every parameter states its role. The split follows the usual rule for stable
+interfaces: the nouns a computation acts on are positional, so they can be renamed; the settings
+are keyword-only, so they can be added and reordered. Prefer abstract types for inputs
+(`Sequence[Points]`, `Mapping[str, Points]`); a list of records enters the key as the list of
+their keys.
 
-    A process constructing the same spec while another runs `__init__` waits for the lease, like
-    `Record.get`, and then runs its own `__init__` on the finished record; so a training loop can
-    resume or skip finished work (`"loss" in self.record`). A `failed` record is rebuilt by the
-    next construction. Edits on the finished record (`obj.record.x = v`, `append`, `del`) take the
-    lease briefly and never change the status. With `mutable=False` the record becomes read-only
-    once `__init__` has built it.
-- **Threads.** Creating and switching the record is locked per instance, and record edits are
-  serialized by the lease. Changing spec attributes while other threads write through
-  `obj.record` is still a race: their writes go to whichever record they fetched.
-- Instances pickle with their spec; unpickling does not run `__init__`, and the record is
-  reopened on first use.
-  Decorated subclasses get their own spec from their own `__init__`.
+- `Fit.Spec` is generated; declaring a `Spec` on a record class raises `TypeError`. A spec passes
+  its settings with `**`: `Fit(points, **spec)`, `spec.replace(seed=1)`.
+- Inside `__init__`, `self.spec` is the spec and every non-private attribute written is a stored
+  field; private names (`self._model`) are plain attributes.
+- A subclass without its own `__init__` inherits the interface; one with its own `__init__` has
+  its own.
 
 ## Concurrency on shared filesystems
 
@@ -411,7 +402,7 @@ workload shows whether it is needed; until then its behaviour may change and it 
 | `ParquetRef`, its listing digest and `SnapshotChanged` | External tables |
 | `TableRef.duckdb`, `TableRef.materialize`, `tensordir.external.expression` | External tables |
 | `td.any_of`, `td.exactly` | Collections and views |
-| `td.transient` in `@td.record` classes | Classes that own a record |
+| `td.transient` | The `__init__` interface |
 | `StoreBackend` subclasses through `select_codec` and `skip_codecs` | joblib |
 | `Record.inputs`, `Record.lineage` | [Composing records](extending.md#composing-records) |
 

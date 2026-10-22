@@ -20,8 +20,6 @@
 
 ::: tensordir.Record
 
-::: tensordir.record
-
 ::: tensordir.transient
 
 ::: tensordir.Collection

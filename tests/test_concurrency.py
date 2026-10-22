@@ -8,7 +8,7 @@ import pytest
 import tensordir as td
 from tensordir import _lease
 from tensordir._lease import Lease, lease_state
-from _records import Counted, Hangs, Square, get_counted, get_hangs
+from _records import Counted, Hangs, SlowWorkspace, Square, get_counted, get_hangs, make_slow_workspace
 
 
 class FakeClock:
@@ -78,27 +78,27 @@ def test_owner_records_job_and_host(tmp_path, monkeypatch):
 
 
 def test_block_false_and_timeout(root):
-    rec = Square.locate({"n": 3})
+    rec = Square.locate(n=3)
     held = Lease.acquire(rec._lock, ttl=60, heartbeat=0)
     assert rec.status == "running"
     with pytest.raises(td.RecordBusy):
-        Square.get({"n": 3}, block=False)
+        Square.get(n=3, block=False)
     t0 = time.monotonic()
     with pytest.raises(TimeoutError):
-        Square.get({"n": 3}, timeout=0.3)
+        Square.get(n=3, timeout=0.3)
     assert time.monotonic() - t0 < 5
     held.release()
-    assert Square.get({"n": 3}, block=False).status == "done"
+    assert Square.get(n=3, block=False).status == "done"
 
 
 def test_stale_lease_is_broken_with_fake_clock(root, monkeypatch):
-    rec = Square.locate({"n": 2})
+    rec = Square.locate(n=2)
     abandoned = Lease.acquire(rec._lock, ttl=Square.lease_ttl, heartbeat=0)
     assert rec.status == "running"
     real = time.time
     monkeypatch.setattr(_lease, "now", lambda: real() + Square.lease_ttl + 1)
     assert rec.status == "stale"
-    assert Square.get({"n": 2}).status == "done"
+    assert Square.get(n=2).status == "done"
     assert not abandoned.held
 
 
@@ -109,7 +109,7 @@ def test_processes_racing_build_exactly_once(root, tmp_path):
         paths = pool.starmap(get_counted, [(str(root), str(counter))] * 6)
     assert len(set(paths)) == 1
     assert len(counter.read_text().split()) == 1
-    rec = Counted.get({"counter": str(counter)})
+    rec = Counted.get(counter=str(counter))
     assert rec.status == "done" and str(rec.path) == paths[0]
 
 
@@ -122,7 +122,7 @@ def test_sigkill_mid_build_becomes_stale_and_recovers(root, tmp_path):
     while not marker.exists():
         assert time.monotonic() < deadline and proc.is_alive()
         time.sleep(0.05)
-    rec = Hangs.locate({"marker": str(marker)})
+    rec = Hangs.locate(marker=str(marker))
     assert rec.status == "running"
     os.kill(proc.pid, signal.SIGKILL)
     proc.join()
@@ -130,6 +130,18 @@ def test_sigkill_mid_build_becomes_stale_and_recovers(root, tmp_path):
     while rec.status != "stale":
         assert time.monotonic() < deadline
         time.sleep(0.1)
-    recovered = Hangs.get({"marker": str(marker), "hang": False})
+    recovered = Hangs.get(marker=str(marker), hang=False)
     assert recovered.status == "done" and recovered.ok is True
     assert recovered.path == rec.path
+
+
+def test_processes_constructing_a_workspace_record_build_it_once(root, tmp_path):
+    marker = tmp_path / "started"
+    ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(3) as pool:
+        results = pool.starmap(make_slow_workspace, [(str(root), str(marker), 0.5)] * 3)
+    assert {status for _, status in results} == {"done"}
+    assert len({pid for pid, _ in results}) == 1  # one process ran __init__; the others waited
+    record = SlowWorkspace(marker=str(marker))
+    record.note = "edited after the build"
+    assert record.status == "done" and record.note == "edited after the build"

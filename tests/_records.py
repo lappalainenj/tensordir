@@ -14,16 +14,11 @@ import tensordir as td
 class Square(td.Record):
     __record_name__ = "Square"
 
-    class Spec(td.Spec):
-        n: int
-        scale: float = 1.0
-        device: str = td.field("cpu", hashed=False)
-
     values: Float[np.ndarray, "n_points"]
 
-    def build(self, spec):
-        self.values = np.arange(spec.n, dtype=float) ** 2 * spec.scale
-        self["summary"] = {"n": spec.n}
+    def __init__(self, /, *, n: int, scale: float = 1.0, device: Annotated[str, td.field(hashed=False)] = "cpu"):
+        self.values = np.arange(n, dtype=float) ** 2 * scale
+        self["summary"] = {"n": n}
 
 
 class Counted(td.Record):
@@ -32,14 +27,10 @@ class Counted(td.Record):
     __record_name__ = "Counted"
     lease_ttl = 30.0
 
-    class Spec(td.Spec):
-        counter: str = td.field(hashed=False)
-        sleep: float = 0.5
-
-    def build(self, spec):
-        with open(spec.counter, "a") as f:
+    def __init__(self, /, *, counter: Annotated[str, td.field(hashed=False)], sleep: float = 0.5):
+        with open(counter, "a") as f:
             f.write(f"{os.getpid()}\n")
-        time.sleep(spec.sleep)
+        time.sleep(sleep)
         self["pid"] = os.getpid()
 
 
@@ -50,45 +41,49 @@ class Hangs(td.Record):
     lease_ttl = 1.0
     heartbeat_interval = 0.2
 
-    class Spec(td.Spec):
-        marker: str = td.field(hashed=False)
-        hang: bool = td.field(True, hashed=False)
-
-    def build(self, spec):
-        Path(spec.marker).touch()
-        while spec.hang:
+    def __init__(
+        self,
+        /,
+        *,
+        marker: Annotated[str, td.field(hashed=False)],
+        hang: Annotated[bool, td.field(hashed=False)] = True,
+    ):
+        Path(marker).touch()
+        while hang:
             time.sleep(0.05)
         self["ok"] = True
 
 
-def get_counted(root: str, counter: str) -> str:
-    with td.use_root(root):
-        return str(Counted.get({"counter": counter}).path)
+class SlowWorkspace(td.Record):
+    """A workspace record whose __init__ (the build) touches a marker and sleeps."""
 
-
-@td.record(name="SlowOwner")
-class SlowOwner:
-    """Its __init__ (the build) touches a marker and sleeps; a rerun on a done record skips that."""
+    __record_name__ = "SlowWorkspace"
+    mutable = True
 
     def __init__(
         self,
+        /,
+        *,
         n: int = 1,
         marker: Annotated[str, td.field(hashed=False)] = "",
         sleep: Annotated[float, td.field(hashed=False)] = 0.0,
     ):
-        self.resumed = "pid" in self.record
-        if not self.resumed:
-            Path(marker).touch()
-            time.sleep(sleep)
-            self.record.pid = os.getpid()
+        Path(marker).touch()
+        time.sleep(sleep)
+        self.pid = os.getpid()
 
 
-def make_slow_owner(root: str, marker: str, sleep: float) -> tuple[bool, int, str]:
+def get_counted(root: str, counter: str) -> str:
     with td.use_root(root):
-        owner = SlowOwner(marker=marker, sleep=sleep)
-        return owner.resumed, owner.record.pid, owner.record.status
+        return str(Counted(counter=counter).path)
+
+
+def make_slow_workspace(root: str, marker: str, sleep: float) -> tuple[int, str]:
+    with td.use_root(root):
+        record = SlowWorkspace(marker=marker, sleep=sleep)
+        return record.pid, record.status
 
 
 def get_hangs(root: str, marker: str) -> None:
     with td.use_root(root):
-        Hangs.get({"marker": marker})
+        Hangs(marker=marker)

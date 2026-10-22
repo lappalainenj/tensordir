@@ -18,18 +18,12 @@ class Net(td.Spec):
 class Train(td.Record):
     __record_name__ = "InspectTrain"
 
-    class Spec(td.Spec):
-        seed: int
-        net: Net = td.field(default_factory=Net)
-        device: str = td.field("cpu", hashed=False)
-        prior: float = td.field(1.0, since=2)
-
     weights: Float[np.ndarray, "n_layers n_units"]
 
-    def build(self, spec):
-        self.weights = np.zeros((2, spec.net.width))
+    def __init__(self, /, *, seed: int, net: Net = td.field(default_factory=Net), device: str = td.field("cpu", hashed=False), prior: float = td.field(1.0, since=2)):
+        self.weights = np.zeros((2, net.width))
         self.append("loss", np.array([1.0, 0.5]))
-        self["summary"] = {"seed": spec.seed}
+        self["summary"] = {"seed": seed}
 
 
 def test_replace_with_dotted_names():
@@ -72,7 +66,7 @@ def test_diff():
 
 
 def test_diff_records_and_views(root):
-    r0, r1 = Train.get({"seed": 0}), Train.get({"seed": 1, "device": "cuda"})
+    r0, r1 = Train.get(seed=0), Train.get(seed=1, device="cuda")
     assert td.diff(r0, r1).names() == ["device", "seed"]
     assert td.diff(td.View(r0), r1, hashed=True).names() == ["seed"]
     assert td.diff(r0, r0.spec.to_dict()).names() == []
@@ -88,7 +82,7 @@ def test_spec_html():
 
 
 def test_record_tree_and_html(root, capsys):
-    record = Train.get({"seed": 0})
+    record = Train.get(seed=0)
     record.memory.cache(lambda x: x)(1)
     capsys.readouterr()
     record.tree()
@@ -101,7 +95,7 @@ def test_record_tree_and_html(root, capsys):
     assert "<b>Train</b>" in page and "<i>done</i>" in page
     assert "net.optim.lr" in page and "[layer, unit]" in page and "summary" in page
     assert "<b>View</b> of" in td.View(record)._repr_html_()
-    absent = Train.locate({"seed": 5})
+    absent = Train.locate(seed=5)
     assert "<i>absent</i>" in absent._repr_html_()
     absent.tree()
     assert capsys.readouterr().out.strip() == f"{absent!r} {absent.path}"
@@ -109,7 +103,7 @@ def test_record_tree_and_html(root, capsys):
 
 def test_ipython_shows_the_tree_and_repr_stays_one_line(root, capsys):
     pretty = pytest.importorskip("IPython.lib.pretty").pretty
-    record = Train.get({"seed": 0})
+    record = Train.get(seed=0)
     record.tree()
     assert pretty(record) == capsys.readouterr().out.rstrip("\n")
     assert "\n" not in repr(record) and "\n" not in repr([record])
@@ -120,7 +114,7 @@ def test_failed_record_html(root):
     class Broken(td.Record):
         __record_name__ = "InspectBroken"
 
-        def build(self, spec):
+        def __init__(self):
             raise ValueError("bad input")
 
     with pytest.raises(td.BuildFailed):

@@ -7,9 +7,10 @@ need it again, found by the parameters that produced it. File names that encode 
 `joblib.Memory` computes twice when two jobs ask at once and cannot be searched by parameters. An
 experiment-tracking server needs setup and stores arrays as files it cannot look into.
 
-tensordir names each result by the parameters that produced it. You declare the parameters in a
-typed spec and write a `build` method; asking for a result reopens it if it exists and builds it
-otherwise, once, even when many jobs on a shared filesystem ask at the same time. Arrays are
+tensordir names each result by the parameters that produced it. You write the computation as the
+`__init__` of a record class, with its inputs before `/` and its settings after `*`; calling the
+class reopens the result if it exists and runs `__init__` otherwise, once, even when many jobs on
+a shared filesystem ask at the same time. Arrays are
 stored as zarr with named dimensions, so you can query results by their parameters and read a
 parameter sweep back as one labeled xarray array.
 
@@ -43,26 +44,27 @@ from jaxtyping import Float
 
 td.set_root("results")  # base root; default: $TENSORDIR_ROOT, else the working directory
 
-class Fit(td.Record):
-    __record_name__ = "Fit"  # stable type id: keys survive module moves
-
-    class Spec(td.Spec):
-        n_columns: int
-        seed: int = 0
-        device: str = td.field("cpu", hashed=False)  # not part of the key
-        prior: float = td.field(1.0, since=2)        # added later: old keys unchanged
-
+class Fit(td.Record):  # the type id, part of every key, is the class name
     centres: Float[np.ndarray, "n_columns n_dims"]   # stored with dims ("column", "dim")
 
-    def build(self, spec, points):
-        rng = np.random.default_rng(spec.seed)
-        self.centres = points[rng.choice(len(points), spec.n_columns)]
+    def __init__(
+        self,
+        points: np.ndarray,                          # an input: enters the key by its digest
+        /,
+        *,
+        n_columns: int,                              # settings: the generated Fit.Spec
+        seed: int = 0,
+        device: str = td.field("cpu", hashed=False),  # not part of the key
+        prior: float = td.field(1.0, since=2),       # added later: old keys unchanged
+    ):
+        rng = np.random.default_rng(seed)
+        self.centres = points[rng.choice(len(points), n_columns)]
         self["summary"] = {"n_points": len(points)}
 
 points = np.random.default_rng(0).normal(size=(500, 2))
-fit = Fit.get(Fit.Spec(n_columns=8), points=points)  # builds; the array input is hashed by digest
-fit = Fit.get({"n_columns": 8}, points=points)       # reopens the same record
-assert Fit.lookup({"n_columns": 9}, points=points) is None  # reopen only: lookup never builds
+fit = Fit(points, n_columns=8)  # builds
+fit = Fit(points, n_columns=8)  # reopens the same record; __init__ does not run
+assert Fit.lookup(points, n_columns=9) is None  # reopen only: lookup never builds
 print(fit.path.relative_to(td.get_root()), fit.status, fit.centres.shape)
 
 print(Fit.query(n_columns=8).table(depth=1, sizes=False)[["key", "status", "spec.seed"]])

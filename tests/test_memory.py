@@ -263,13 +263,13 @@ def test_records_hash_by_identity(root, cache):
         calls.append(rec.key)
         return float(rec.values.sum())
 
-    a = Square.get({"n": 3})
+    a = Square.get(n=3)
     assert total(a) == 5.0
-    assert total(Square.locate({"n": 3})) == 5.0
-    assert total(Square.get({"n": 4})) == 14.0
+    assert total(Square.locate(n=3)) == 5.0
+    assert total(Square.get(n=4)) == 14.0
     assert len(calls) == 2
-    assert joblib.hash(a) == joblib.hash(Square.locate(Square.Spec(n=3, device="cuda")))
-    assert needs_compute(total, Square.locate({"n": 5}))
+    assert joblib.hash(a) == joblib.hash(Square.locate(n=3, device="cuda"))
+    assert needs_compute(total, Square.locate(n=5))
     assert not needs_compute(total, a)
 
 
@@ -278,7 +278,7 @@ def test_specs_hash_canonically():
 
 
 def test_record_memory_lives_in_the_record(root):
-    rec = Square.get({"n": 2})
+    rec = Square.get(n=2)
     mem = rec.memory
     assert mem.location == str(rec.path / "__cache__")
     assert isinstance(mem.store_backend, td.StoreBackend)

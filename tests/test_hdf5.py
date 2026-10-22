@@ -14,16 +14,12 @@ class Responses(td.Record):
     __record_name__ = "Hdf5Responses"
     codecs = {"ndarray": "hdf5"}
 
-    class Spec(td.Spec):
-        n_cells: int = 4
-        n_frames: int = 3
-
     rates: Float[np.ndarray, "n_cells n_frames"]
     gains: Float[np.ndarray, "n_cells"]
 
-    def build(self, spec):
-        self.rates = np.arange(spec.n_cells * spec.n_frames, dtype=float).reshape(spec.n_cells, spec.n_frames)
-        self.gains = np.ones(spec.n_cells)
+    def __init__(self, /, *, n_cells: int = 4, n_frames: int = 3):
+        self.rates = np.arange(n_cells * n_frames, dtype=float).reshape(n_cells, n_frames)
+        self.gains = np.ones(n_cells)
         self.append("loss", [1.0, 0.5])  # appends follow the record's codecs too
         self.append("loss", [0.25])
         self["summary"] = {"ok": True}  # other codecs unaffected
@@ -51,7 +47,7 @@ def test_per_field_choice_and_size_checks(root):
         __record_name__ = "Hdf5Mixed"
         mutable = True
 
-        def build(self, spec):
+        def __init__(self):
             self.write("a", np.zeros((2, 3)), codec="hdf5", dims=("x", "y"))
             self.write("b", np.zeros(2), dims=("x",))
 
@@ -66,7 +62,7 @@ def test_per_field_choice_and_size_checks(root):
     class Mismatch(td.Record):
         __record_name__ = "Hdf5Mismatch"
 
-        def build(self, spec):
+        def __init__(self):
             self.write("a", np.zeros(2), codec="hdf5", dims=("x",))
             self.write("b", np.zeros(3), dims=("x",))
 
@@ -77,7 +73,7 @@ def test_per_field_choice_and_size_checks(root):
         class Objects(td.Record):
             __record_name__ = "Hdf5Objects"
 
-            def build(self, spec):
+            def __init__(self):
                 self.write("a", np.array([object()]), codec="hdf5")
 
         Objects.get()
@@ -88,10 +84,10 @@ class Log(td.Record):
     mutable = True
     codecs = {"ndarray": "hdf5"}
 
-    class Spec(td.Spec):
-        run: int = 0
-
     loss: Float[np.ndarray, "n_steps"]
+
+    def __init__(self, /, *, run: int = 0):
+        pass
 
 
 def test_append_extends_a_resizable_dataset(root):
@@ -117,7 +113,7 @@ def test_append_extends_a_resizable_dataset(root):
 
 @pytest.mark.parametrize("codec", ["ndarray", "hdf5"])
 def test_append_errors_match_between_codecs(root, codec):
-    record = Log.get({"run": 1})
+    record = Log.get(run=1)
     record.append("rows", np.zeros((2, 3)), codec=codec)
     with pytest.raises(ValueError, match="cannot append rows of shape"):
         record.append("rows", np.zeros((1, 4)))

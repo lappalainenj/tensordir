@@ -7,10 +7,10 @@ mutable folder and a reader. tensordir splits those roles:
 
 | datamate | tensordir | role |
 |---|---|---|
-| `Directory` subclass with `__init__(self, ...)` | `Record` subclass with `build(self, spec, **inputs)` | a recipe and its result |
-| a class holding `self.dir = Directory(config)` and writing to it (flyvis `Solver`) | `@td.record` class, or a `mutable = True` record held as `self.record` | an object that fills a record over time |
-| `config` (`Namespace`), `_meta.yaml` | `Spec` (frozen dataclass), `_meta.json` | what identifies a result |
-| `Directory(config)` / `Directory(path, config)` | `Record.get(spec)` / `Record.at(path, spec)` | build or reopen |
+| `Directory` subclass with `__init__(self, ...)` | `Record` subclass with `__init__(self, *inputs, /, *, **settings)` | a recipe and its result |
+| a class holding `self.dir = Directory(config)` and writing to it (flyvis `Solver`) | a `mutable = True` record, used directly or held as `self.record` | an object that fills a record over time |
+| `config` (`Namespace`), `_meta.yaml` | the generated `Spec` (frozen dataclass), `_meta.json` | what identifies a result |
+| `Directory(config)` / `Directory(path, config)` | `Fit(*inputs, **settings)` / `Fit.at(path, *inputs, **settings)` | build or reopen |
 | list of directories, `info(Type)` | `Collection` from `Record.query(...)`, `Record.info(...)` | many results |
 | `NetworkView`, `CheckpointedNetwork` (flyvis) | `View` | derived objects and caches |
 | `Namespace.diff` | `tensordir.diff`, `Spec.diff` | compare configurations |
@@ -24,15 +24,15 @@ spec or inputs.
 
 | Task | datamate / flyvis / another project / joblib | tensordir |
 |---|---|---|
-| **Configure & build** | `class Fit(Directory): def __init__(self, n=8, seed=0)` | `class Fit(td.Record)` with `class Spec(td.Spec)` and `def build(self, spec)` |
-| | `Fit(n=8)`, `Fit({"n": 8})`, `Fit(Namespace(n=8))` | `Fit.get(Fit.Spec(n=8))`, `Fit.get({"n": 8})` |
-| | `Directory("runs/000", config)` (hand-named, flyvis `NetworkDir`) | `Fit.at("runs/000", spec)` |
+| **Configure & build** | `class Fit(Directory): def __init__(self, n=8, seed=0)` | `class Fit(td.Record): def __init__(self, /, *, n=8, seed=0)` |
+| | `Fit(n=8)`, `Fit({"n": 8})`, `Fit(Namespace(n=8))` | `Fit(n=8)`, `Fit(**spec)` |
+| | `Directory("runs/000", config)` (hand-named, flyvis `NetworkDir`) | `Fit.at("runs/000", n=8)` |
 | | `Namespace(a=1, model=Namespace(lr=0.1))` | nested `Spec` classes, `spec.replace(model__lr=0.1)` |
 | | config fields that do not change the result (device) | `td.field("cpu", hashed=False)` |
 | | adding a config field without orphaning results | `td.field(default, since=2)` |
 | | `@root(path)` class decorator | `@td.root(path)` or the class attribute `root = path`; a relative path is joined onto the base root ([rule](design.md#roots)) |
 | | `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
-| | building from another directory's contents | inputs: `Cluster.get(spec, points=points_record, weights=array)` |
+| | building from another directory's contents | inputs: `Cluster(points_record, weights_array, n_clusters=3)` |
 | | reading a Delta export (another project `export.to_table()`), caching by release version | a `td.DeltaRef(uri, version=...)` spec field; `ref.to_table(columns=, filter=)`, `ref.duckdb()`, `ref.materialize(self, name)` |
 | **Open & read** | `Directory(path)` | `td.Record.at(path)` (returns the registered class) |
 | | `dir.config.x`, `dir.config.to_dict()` | `record.spec.x`, `record.spec.to_dict()`, `record.spec.flat()` |
@@ -40,11 +40,11 @@ spec or inputs.
 | | `dir.x[:]`, `dir.x[()]`, `dir["x"]` (HDF5 `ArrayFile`) | `record.x` (numpy for typed fields), `record["x"][:]` (lazy zarr), `record.load("x")` |
 | | `"x" in dir`, `dir.keys()`, `dir.tree()`, `repr(dir)` | `"x" in record`, `record.keys()`, `record.tree()`; IPython shows the tree for a record that ends a cell, Jupyter an HTML table, `repr` one line |
 | | sub-directories (`connectome.nodes.type[:]`) | one DataFrame (`parquet`) or `xarray.Dataset`/`DataTree` field |
-| | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `build`; `record.nodes` is the DataFrame |
+| | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `__init__`; `record.nodes` is the DataFrame |
 | **Labeled arrays** | shapes in docstrings, `xarray` built by hand | jaxtyping annotations store dims; `record.to_xarray("x")`, `xr.open_zarr(record.path / "data.zarr")` |
-| **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `build` (zarr; HDF5 under `codecs = {"ndarray": "hdf5"}`); `in_place = True` to let readers watch |
+| **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `__init__` (zarr; HDF5 under `codecs = {"ndarray": "hdf5"}`); `in_place = True` to let readers watch |
 | | `self.dir.loss = losses`, `self.dir.extend(...)` from a `Solver` | `self.record.loss = losses`, `self.record.append(...)` on a workspace record |
-| | `del dir.x`, `dir.rmtree("x")` | `del record.x` (in `build` or on a workspace record) |
+| | `del dir.x`, `dir.rmtree("x")` | `del record.x` (in `__init__` or on a workspace record) |
 | | checkpoints `chkpts/chkpt_00010` + `extend("chkpt_index", ...)` | `self[f"chkpt_{i:05d}"] = model` + `self.append("chkpt_step", [i])` |
 | **Query many runs** | `collect_all_of_type(T)`, `dir_walk`, `EnsembleDir` children | `T.query(status=None)` |
 | | filtering a list of directories by config | `T.query(model__lr=0.1, seed=[0, 1])`, `collection.where(...)` |
@@ -63,9 +63,9 @@ spec or inputs.
 | | `CheckpointedNetwork.__reduce__` for identity hashing | records and views pickle as `(type, key, path)` |
 | | `FIFOCache` / `lru_cache` on view methods | `@td.cached_method(maxsize=...)` |
 | **Status & concurrency** | `running` / `done` / `stopped`, killed jobs stay `running` | `absent`, `running`, `done`, `failed` (traceback stored), `stale` (lease expired) |
-| | `_override_status(str(e))`, `set_run_failed` (another project) | automatic: an exception in `build` stores a `failed` record |
+| | `_override_status(str(e))`, `set_run_failed` (another project) | automatic: an exception in `__init__` stores a `failed` record |
 | | `locked_meta` with `fcntl` (another project), SWMR HDF5 | `mkdir` leases with heartbeats; atomic rename of finished builds |
-| | rerun a failure | `Fit.get(spec, retry_failed=True)` |
+| | rerun a failure | `Fit.get(**spec, retry_failed=True)` |
 | | job status of an ensemble (flyvis `ensemble.status()`) | `collection.status_counts()`, `tensordir status` |
 | **Delete & clean** | `dir.rmtree("y")`, `delete_if_exists=True` | `record.delete()`, then `get` rebuilds |
 | | `rm_all_of_type(T)`, `clean_root_dir()` | `T.query(status=None).delete()`, `tensordir gc` |
@@ -90,19 +90,13 @@ fit.config.n_columns, fit.centres[:]
 # tensordir
 @td.root(results / "fits")
 class Fit(td.Record):
-    __record_name__ = "Fit"
-
-    class Spec(td.Spec):
-        n_columns: int = 8
-        seed: int = 0
-        device: str = td.field("cpu", hashed=False)
-
     centres: Float[np.ndarray, "n_columns n_dims"]
 
-    def build(self, spec, points):
-        self.centres = fit(points, spec.n_columns, spec.seed)
+    def __init__(self, points, /, *, n_columns: int = 8, seed: int = 0,
+                 device: str = td.field("cpu", hashed=False)):
+        self.centres = fit(points, n_columns, seed)
 
-fit = Fit.get({"n_columns": 8}, points=load_points())  # path from the key, under results/fits
+fit = Fit(load_points(), n_columns=8)  # path from the key, under results/fits
 fit.spec.n_columns, fit.centres
 ```
 
@@ -119,11 +113,11 @@ self.dir.extend("chkpt_index", [self._last_chkpt_ind])
 class Train(td.Record):
     in_place = True  # readers see rows while the build runs
 
-    def build(self, spec):
-        for step in range(spec.n_steps):
+    def __init__(self, /, *, n_steps: int = 1000, checkpoint_every: int = 100):
+        for step in range(n_steps):
             ...
             self.append("loss", [loss])
-            if step % spec.checkpoint_every == 0:
+            if step % checkpoint_every == 0:
                 self[f"chkpt_{step:05d}"] = model
                 self.append("chkpt_step", [step])
 ```
@@ -142,25 +136,25 @@ class Solver:
 ```
 
 ```python
-# tensordir: the __init__ arguments are the spec, self.record a workspace record
-@td.record
-class Solver:
-    def __init__(self, network: NetworkSpec, task: TaskSpec, n_iters: int = 250_000,
+# tensordir: a workspace record; its __init__ is the build, its methods write later
+class Solver(td.Record):
+    mutable = True
+
+    def __init__(self, /, *, network: NetworkSpec, task: TaskSpec, n_iters: int = 250_000,
                  device: Annotated[str, td.field(hashed=False)] = "cuda"):
-        self.network = make_network(network)
+        self.config_note = "..."                   # written as part of the build
 
-    def checkpoint(self, index):
-        self.record[f"chkpt_{index:05d}"] = self.network   # state dict as safetensors
-        self.record.append("chkpt_index", [index])
-        self.record.best_chkpt_index = index
+    def checkpoint(self, network, index):
+        self[f"chkpt_{index:05d}"] = network         # state dict as safetensors
+        self.append("chkpt_index", [index])
+        self.best_chkpt_index = index
 
-solver = Solver(NetworkSpec(), TaskSpec())          # __init__ builds the run, or reruns on it
-Solver.Record.query(n_iters=250_000)                # every run, by spec
+solver = Solver(network=NetworkSpec(), task=TaskSpec())  # builds the run, or reopens it
+Solver.query(n_iters=250_000)                            # every run, by settings
 ```
 
-Without the decorator, keep the class as it is and make the record type mutable:
-`class Network(td.Record): mutable = True` and `self.record = Network.at(results / name, spec)`
-(hand-named) or `Network.get(spec)`. See
+To keep a class that is not a record, hold one: `self.record = Network(**spec)`, or
+`Network.at(results / name, **spec)` for a hand-named directory. See
 [Design](design.md#writes-immutability-and-workspace-records) for the rules.
 
 ### Query, tables and where
@@ -229,7 +223,7 @@ class NetworkView(td.View):
     def responses(self, stimuli, batch_size=4):
         return self.memory.cache(compute_responses, ignore=["batch_size"])(self, stimuli, batch_size)
 
-view = NetworkView(Network.get(spec))
+view = NetworkView(Network(**spec))
 td.needs_compute(view.memory.cache(compute_responses, ignore=["batch_size"]), view, stimuli, 4)
 ```
 
@@ -250,11 +244,11 @@ rm_all_of_type(FitDir, y_n="y")
 ```python
 # tensordir
 try:
-    run = Train.get(spec)                # failures are stored with their traceback
+    run = Train(**spec)                  # failures are stored with their traceback
 except td.BuildFailed as e:
     print(e)
 Train.query(status=None).status_counts() # {"done": 48, "failed": 2}
-Train.query(status="failed").delete()    # or Train.get(spec, retry_failed=True)
+Train.query(status="failed").delete()    # or Train.get(**spec, retry_failed=True)
 ```
 
 ## Not carried over

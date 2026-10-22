@@ -11,27 +11,27 @@ from _records import Square
 
 
 class Run(td.Record):
-    """A workspace record without a build: a training loop fills it from outside."""
+    """A workspace record whose build writes nothing: a training loop fills it from outside."""
 
     __record_name__ = "WorkspaceRun"
     mutable = True
 
-    class Spec(td.Spec):
-        lr: float = 0.1
-
     losses: Float[np.ndarray, "n_steps"]
+
+    def __init__(self, /, *, lr: float = 0.1):
+        pass
 
 
 class Trainer:
     def __init__(self, lr: float):
-        self.record = Run.get({"lr": lr})
+        self.record = Run(lr=lr)
 
     def step(self, losses):
         self.record.losses = np.asarray(losses)
 
 
 def test_immutable_records_reject_attribute_writes(root):
-    record = Square.get({"n": 3})
+    record = Square(n=3)
     with pytest.raises(td.ReadOnlyError, match="mutable = True"):
         record.extra = 1  # used to set a plain Python attribute silently
     with pytest.raises(td.ReadOnlyError):
@@ -47,12 +47,13 @@ def test_build_stores_untyped_attributes_and_deletes(root):
     class Scratch(td.Record):
         __record_name__ = "WorkspaceScratch"
 
-        def build(self, spec):
+        def __init__(self):
             self.notes = {"a": 1}  # no annotation: still a field
+            self._cache = "plain attribute"  # private names are plain Python attributes
             self.tmp = np.zeros(3)
             del self.tmp
 
-    record = Scratch.get()
+    record = Scratch()
     assert record.notes == {"a": 1} and record.keys() == ["notes"]
 
 
@@ -76,7 +77,7 @@ def test_trainer_writes_through_held_record(root):
 
 
 def test_workspace_append_and_overwrite_keep_appendable(root):
-    record = Run.get({"lr": 0.2})
+    record = Run(lr=0.2)
     record.append("step", [0, 1])
     record.append("step", [2])
     np.testing.assert_array_equal(record.load("step"), [0, 1, 2])
@@ -91,10 +92,10 @@ def test_workspace_append_and_overwrite_keep_appendable(root):
 
 
 def test_concurrent_edits_keep_every_field(root):
-    record = Run.get({"lr": 0.3})
+    record = Run(lr=0.3)
 
     def writer(i):
-        handle = Run.locate({"lr": 0.3}, root=root)  # use_root does not reach new threads
+        handle = Run.locate(lr=0.3, root=root)  # use_root does not reach new threads
         for j in range(5):
             handle[f"w{i}_{j}"] = j
 
@@ -111,7 +112,7 @@ def test_workspace_edits_need_a_finished_build(root):
         __record_name__ = "WorkspaceNoBuild"
 
     with pytest.raises(td.BuildFailed, match="NotImplementedError"):
-        NoBuild.get()  # only workspace records may leave out build()
+        NoBuild()  # only workspace records may leave out __init__
 
     seen = {}
 
@@ -120,14 +121,14 @@ def test_workspace_edits_need_a_finished_build(root):
         mutable = True
         in_place = True
 
-        def build(self, spec):
+        def __init__(self):
             self["first"] = 1
             try:
                 Slow.locate().other = 2  # another handle while the build runs
             except td.ReadOnlyError as exc:
                 seen["error"] = str(exc)
 
-    record = Slow.get()
+    record = Slow()
     assert "running" in seen["error"]
     record.other = 2
     assert record.keys() == ["first", "other"]
@@ -136,10 +137,10 @@ def test_workspace_edits_need_a_finished_build(root):
         __record_name__ = "WorkspaceBroken"
         mutable = True
 
-        def build(self, spec):
+        def __init__(self):
             raise RuntimeError("boom")
 
     with pytest.raises(td.BuildFailed):
-        Broken.get()
+        Broken()
     with pytest.raises(td.ReadOnlyError, match="failed"):
         Broken.locate().x = 1

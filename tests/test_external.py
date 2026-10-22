@@ -39,13 +39,9 @@ def delta_table(tmp_path):
 class Edges(td.Record):
     __record_name__ = "ExternalEdges"
 
-    class Spec(td.Spec):
-        synapses: td.DeltaRef
-        min_size: float = 0.0
-
-    def build(self, spec):
-        spec.synapses.materialize(self, "synapses", columns=["pre", "post", "size"], filter={"size": f">{spec.min_size}"})
-        frame = spec.synapses.to_pandas(columns=["pre", "post"], filter={"size": f">{spec.min_size}"})
+    def __init__(self, /, *, synapses: td.DeltaRef, min_size: float = 0.0):
+        synapses.materialize(self, "synapses", columns=["pre", "post", "size"], filter={"size": f">{min_size}"})
+        frame = synapses.to_pandas(columns=["pre", "post"], filter={"size": f">{min_size}"})
         self["edges"] = frame.groupby(["pre", "post"]).size().rename("n_syn").reset_index()
 
 
@@ -72,8 +68,8 @@ def test_delta_ref_in_specs_and_records(root, delta_table):
     spec = Edges.Spec(synapses=first)
     assert spec.to_dict()["synapses"] == {"__delta__": first.uri, "version": 0}
     assert Edges.Spec.from_dict(spec.to_dict()).synapses == first  # revived as a DeltaRef
-    assert Edges.compute_key(spec) != Edges.compute_key(spec.replace(synapses=td.DeltaRef(delta_table, version=1)))
-    record = Edges.get(spec)
+    assert Edges.compute_key(**spec) != Edges.compute_key(**spec.replace(synapses=td.DeltaRef(delta_table, version=1)))
+    record = Edges(**spec)
     assert "secret" not in (record.path / "_meta.json").read_text()
     stored = record["synapses"]
     assert isinstance(stored, ds.Dataset) and stored.schema.names == ["pre", "post", "size"]
@@ -109,20 +105,17 @@ def test_parquet_ref_pins_listing(root, tmp_path):
     class Summary(td.Record):
         __record_name__ = "ExternalSummary"
 
-        class Spec(td.Spec):
-            table: td.ParquetRef
+        def __init__(self, /, *, table: td.ParquetRef):
+            self["n"] = table.to_table().num_rows
 
-        def build(self, spec):
-            self["n"] = spec.table.to_table().num_rows
-
-    assert Summary.get({"table": ref}).n == 30
+    assert Summary.get(table=ref).n == 30
     extra = _synapses(4, offset=2).drop_columns(["part"])
     ds.write_dataset(extra, path / "part=2", format="parquet", basename_template="extra-{i}.parquet")
     with pytest.raises(td.SnapshotChanged):
         ref.to_table()
     newer = td.ParquetRef(path)
     assert newer.version != ref.version and newer.to_table().num_rows == 34
-    assert Summary.compute_key({"table": newer}) != Summary.compute_key({"table": ref})
+    assert Summary.compute_key(table=newer) != Summary.compute_key(table=ref)
     with pytest.raises(FileNotFoundError):
         td.ParquetRef(tmp_path / "empty-or-missing")
 

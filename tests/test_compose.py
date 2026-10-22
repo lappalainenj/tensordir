@@ -11,72 +11,54 @@ import tensordir as td
 class Source(td.Record):
     __record_name__ = "ComposeSource"
 
-    class Spec(td.Spec):
-        seed: int = 0
-
     x: np.ndarray
 
-    def build(self, spec):
-        self.x = np.random.default_rng(spec.seed).normal(size=5)
+    def __init__(self, /, *, seed: int = 0):
+        self.x = np.random.default_rng(seed).normal(size=5)
 
 
 class Scaled(td.Record):
     __record_name__ = "ComposeScaled"
 
-    class Spec(td.Spec):
-        scale: float = 2.0
-
     y: np.ndarray
 
-    def build(self, spec, source: Source):
-        self.y = source.x * spec.scale
+    def __init__(self, source: Source, /, *, scale: float = 2.0):
+        self.y = source.x * scale
 
 
 class Summed(td.Record):
     __record_name__ = "ComposeSummed"
 
-    class Spec(td.Spec):
-        shift: float = 1.0
-
     z: np.ndarray
 
-    def build(self, spec, scaled: Scaled, source: Source, weights: np.ndarray, sources: list):
-        self.z = scaled.y + source.x * weights + spec.shift + sum(s.x for s in sources)
+    def __init__(self, scaled: Scaled, source: Source, weights: np.ndarray, sources: list, /, *, shift: float = 1.0):
+        self.z = scaled.y + source.x * weights + shift + sum(s.x for s in sources)
 
 
 class Referencing(td.Record):
     __record_name__ = "ComposeReferencing"
 
-    class Spec(td.Spec):
-        scaled: Scaled
-        offset: float = 0.0
-
     w: np.ndarray
 
-    def build(self, spec):
-        self.w = spec.scaled.y + spec.offset
+    def __init__(self, /, *, scaled: Scaled, offset: float = 0.0):
+        self.w = scaled.y + offset
 
 
 class Nested(td.Record):
     __record_name__ = "ComposeNested"
 
-    class Spec(td.Spec):
-        source: Source.Spec = Source.Spec()
-        optional: Source.Spec | None = None
-        scale: float = 2.0
-
     y: np.ndarray
 
-    def build(self, spec):
-        self.y = Source.get(spec.source).x * spec.scale
+    def __init__(self, /, *, source: Source.Spec = Source.Spec(), optional: Source.Spec | None = None, scale: float = 2.0):
+        self.y = Source(**source).x * scale
 
 
 class Workspace(td.Record):
     __record_name__ = "ComposeWorkspace"
     mutable = True
 
-    class Spec(td.Spec):
-        name: str = "w"
+    def __init__(self, /, *, name: str = "w"):
+        pass
 
 
 class Total(td.Record):
@@ -84,27 +66,27 @@ class Total(td.Record):
 
     total: float
 
-    def build(self, spec, workspace: Workspace):
+    def __init__(self, workspace: Workspace, /):
         self.total = float(workspace.load("v").sum())
 
 
 @pytest.fixture
 def chain(root):
-    source = Source.get()
-    scaled = Scaled.get(source=source)
-    extra = Source.get({"seed": 1})
-    summed = Summed.get(scaled=scaled, source=source, weights=np.ones(5), sources=[extra])
+    source = Source()
+    scaled = Scaled(source)
+    extra = Source(seed=1)
+    summed = Summed(scaled, source, np.ones(5), [extra])
     return source, scaled, extra, summed
 
 
 def test_inputs_reopen_records_and_keep_other_values(chain):
     source, scaled, extra, summed = chain
     inputs = summed.inputs
-    assert inputs["scaled"] == scaled and inputs["source"] == source
-    assert isinstance(inputs["scaled"], Scaled)
-    assert inputs["sources"] == [extra]
-    assert inputs["weights"] == td.Digest.of(np.ones(5))
-    np.testing.assert_array_equal(inputs["scaled"].y, scaled.y)
+    assert inputs[0] == scaled and inputs[1] == source
+    assert isinstance(inputs[0], Scaled)
+    assert inputs[3] == [extra]
+    assert inputs[2] == td.Digest.of(np.ones(5))
+    np.testing.assert_array_equal(inputs[0].y, scaled.y)
     assert summed.meta["upstream"][scaled.key] == str(scaled.path)
 
 
@@ -119,8 +101,8 @@ def test_lineage_walks_the_dag_upstream_first(chain):
 
 def test_upstream_change_rekeys_downstream(chain):
     _, _, extra, summed = chain
-    other = Source.get({"seed": 2})
-    rebuilt = Summed.get(scaled=Scaled.get(source=other), source=other, weights=np.ones(5), sources=[extra])
+    other = Source(seed=2)
+    rebuilt = Summed(Scaled(other), other, np.ones(5), [extra])
     assert rebuilt.key != summed.key
 
 
@@ -130,22 +112,22 @@ def test_inputs_survive_a_moved_root(root, chain, tmp_path):
     shutil.copytree(root, moved)
     shutil.rmtree(root)
     with td.use_root(moved):
-        inputs = Summed.at(moved / "ComposeSummed" / summed.key[:16]).inputs
-        assert inputs["scaled"].path == moved / "ComposeScaled" / scaled.key[:16]
-        assert inputs["scaled"].status == "done"
+        inputs = td.Record.at(moved / "ComposeSummed" / summed.key[:16]).inputs
+        assert inputs[0].path == moved / "ComposeScaled" / scaled.key[:16]
+        assert inputs[0].status == "done"
 
 
 def test_deleted_input_reopens_as_absent(chain):
     _, scaled, _, summed = chain
     scaled.delete()
-    assert summed.inputs["scaled"].status == "absent"
+    assert summed.inputs[0].status == "absent"
     assert {r.key: r.status for r in summed.lineage()}[scaled.key] == "absent"
 
 
 def test_record_in_spec_field_is_revived(chain):
     _, scaled, _, _ = chain
-    built = Referencing.get(Referencing.Spec(scaled=scaled))
-    reopened = Referencing.at(built.path)
+    built = Referencing(scaled=scaled)
+    reopened = td.Record.at(built.path)
     assert isinstance(reopened.spec.scaled, Scaled)
     assert reopened.spec.scaled == scaled
     assert reopened.spec.hashed_dict() == built.spec.hashed_dict()
@@ -156,31 +138,31 @@ def test_record_in_spec_field_is_revived(chain):
 
 
 def test_unbuilt_input_is_refused_before_the_build(root):
-    pending = Source.locate({"seed": 9})
-    with pytest.raises(ValueError, match=r"input 'source'.*absent.*Source\.get"):
-        Scaled.get(source=pending)
-    assert Scaled.locate(source=pending).status == "absent"  # nothing recorded as failed
-    with pytest.raises(ValueError, match="spec holds"):
-        Referencing.get(Referencing.Spec(scaled=Scaled.locate(source=pending)))
-    assert Scaled.lookup(source=pending) is None
+    pending = Source.locate(seed=9)
+    with pytest.raises(ValueError, match=r"input 'source'.*absent.*build it first"):
+        Scaled(pending)
+    assert Scaled.locate(pending).status == "absent"  # nothing recorded as failed
+    with pytest.raises(ValueError, match="settings hold"):
+        Referencing(scaled=Scaled.locate(pending))
+    assert Scaled.lookup(pending) is None
 
 
 def test_done_record_reopens_without_checking_inputs(chain):
     source, scaled, _, _ = chain
     source.delete()
-    assert Scaled.get(source=Source.locate()) == scaled
+    assert Scaled(Source.locate()) == scaled
 
 
 def test_workspace_input_edit_rekeys_downstream(root):
-    workspace = Workspace.get()
+    workspace = Workspace()
     workspace["v"] = np.zeros(3)
-    first = Total.get(workspace=workspace)
+    first = Total(workspace)
     assert first.total == 0.0
-    assert Total.get(workspace=workspace) == first
+    assert Total(workspace) == first
     workspace["v"] = np.ones(3)
-    second = Total.get(workspace=workspace)
+    second = Total(workspace)
     assert second.key != first.key and second.total == 3.0
-    assert first.meta["inputs"]["workspace"]["modified"] != second.meta["inputs"]["workspace"]["modified"]
+    assert first.meta["inputs"][0]["modified"] != second.meta["inputs"][0]["modified"]
 
 
 def test_dict_given_to_nested_spec_field_becomes_a_spec(root):
@@ -188,5 +170,5 @@ def test_dict_given_to_nested_spec_field_becomes_a_spec(root):
     assert isinstance(spec.source, Source.Spec) and spec.source.seed == 3
     assert isinstance(spec.optional, Source.Spec)
     assert spec == Nested.Spec(source=Source.Spec(seed=3), optional=Source.Spec(seed=4))
-    assert Nested.get({"source": {"seed": 3}}).spec.source.seed == 3
+    assert Nested(source={"seed": 3}).spec.source.seed == 3
     assert len(Nested.query(source__seed=3)) == 1 and len(Nested.query(source__seed=4)) == 0

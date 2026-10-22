@@ -102,6 +102,16 @@ class Spec:
             out[f.name] = value
         return dict(sorted(out.items()))
 
+    def keys(self) -> list[str]:
+        """The field names, so `Fit(**spec)` passes a spec's settings."""
+        return [f.name for f in dataclasses.fields(self)]
+
+    def __getitem__(self, name: str) -> Any:
+        """The value of field `name` (nested specs stay specs)."""
+        if name not in self.__dataclass_fields__:
+            raise KeyError(name)
+        return getattr(self, name)
+
     def to_dict(self) -> dict:
         """All fields in canonical JSON form (including fields excluded from the key)."""
         return canonical(self, full=True)

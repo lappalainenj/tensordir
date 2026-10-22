@@ -18,18 +18,15 @@ class Holder(td.Record):
 
     __record_name__ = "Holder"
 
-    class Spec(td.Spec):
-        case: str
-
-    def build(self, spec):
-        self.write("value", VALUES[spec.case], codec=CODECS.get(spec.case))
+    def __init__(self, /, *, case: str):
+        self.write("value", VALUES[case], codec=CODECS.get(case))
 
 
 def store(case, value, codec=None):
     VALUES[case] = value
     if codec:
         CODECS[case] = codec
-    return Holder.get({"case": case})
+    return Holder.get(case=case)
 
 
 ARRAYS = {
@@ -161,7 +158,7 @@ def test_safetensors_state_dict(root):
 class Rewrites(td.Record):
     __record_name__ = "Rewrites"
 
-    def build(self, spec):
+    def __init__(self):
         self["x"] = np.arange(3)
         self["x"] = {"now": "json"}
         self["y"] = {"first": 1}

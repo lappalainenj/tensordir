@@ -62,14 +62,13 @@ def _base() -> Path:
 def _record_class(cls: type) -> type:
     from ._record import Record
 
-    target = getattr(cls, "Record", None) if getattr(cls, "__tensordir_owner__", False) else cls
-    if not (isinstance(target, type) and issubclass(target, Record)):
-        raise TypeError(f"expected a Record subclass or a @record class, got {cls!r}")
-    return target
+    if not (isinstance(cls, type) and issubclass(cls, Record)):
+        raise TypeError(f"expected a Record subclass, got {cls!r}")
+    return cls
 
 
 def get_root(cls: type | None = None, /, *, root: str | os.PathLike | None = None) -> Path:
-    """The directory holding records of `cls` (a `Record` subclass or `@tensordir.record` class).
+    """The directory holding records of `cls`, a `Record` subclass.
 
     The result is `base / path`: `base` is the innermost `use_root`, else `set_root`, else
     `$TENSORDIR_ROOT`, else the current working directory; `path` is `root` if given, else
@@ -103,16 +102,16 @@ def root(path: str | os.PathLike | None) -> Callable[[type], type]:
     class Fixture(tensordir.Record): ...
     ```
 
-    Same as the class attribute `root = "connectomes"`; the decorator also accepts classes made
-    with `@tensordir.record`. The path is stored as given and joined on every access, so a
-    relative root follows `use_root`, `set_root` and the working directory. See `get_root`.
+    Same as the class attribute `root = "connectomes"`. The path is stored as given and joined on
+    every access, so a relative root follows `use_root`, `set_root` and the working directory.
+    See `get_root`.
     """
 
     def decorate(cls: type) -> type:
         try:
             target = _record_class(cls)
         except TypeError:
-            raise TypeError(f"@root decorates Record subclasses or @record classes, not {cls!r}") from None
+            raise TypeError(f"@root decorates Record subclasses, not {cls!r}") from None
         target.root = path
         return cls
 

@@ -19,28 +19,22 @@ class Model(td.Spec):
 class Sweep(td.Record):
     __record_name__ = "Sweep"
 
-    class Spec(td.Spec):
-        seed: int
-        model: Model = td.field(default_factory=Model)
-        tag: str = "base"
-        fail: bool = False
-
     response: xr.DataArray
 
-    def build(self, spec):
-        if spec.fail:
+    def __init__(self, /, *, seed: int, model: Model = td.field(default_factory=Model), tag: str = "base", fail: bool = False):
+        if fail:
             raise RuntimeError("diverged")
         t = np.arange(4)
-        self.response = xr.DataArray(spec.seed * spec.model.lr * t, dims="time", coords={"time": t})
+        self.response = xr.DataArray(seed * model.lr * t, dims="time", coords={"time": t})
 
 
 @pytest.fixture
 def sweep(root):
     for seed in range(3):
-        Sweep.get({"seed": seed})
-    Sweep.get({"seed": 0, "model": Model(lr=0.5)})
+        Sweep.get(seed=seed)
+    Sweep.get(seed=0, model=Model(lr=0.5))
     with pytest.raises(td.BuildFailed):
-        Sweep.get({"seed": 9, "fail": True})
+        Sweep.get(seed=9, fail=True)
     return root
 
 
@@ -74,25 +68,18 @@ def test_queries_see_defaults_of_fields_added_later(root):
     class Grown(td.Record):
         __record_name__ = "Grown"
 
-        class Spec(td.Spec):
-            n: int
+        def __init__(self, /, *, n: int):
+            self["n"] = n
 
-        def build(self, spec):
-            self["n"] = spec.n
-
-    old = Grown.get({"n": 1})
+    old = Grown.get(n=1)
 
     class Grown(td.Record):  # the same record type after adding a field
         __record_name__ = "Grown"
 
-        class Spec(td.Spec):
-            n: int
-            prior: float = td.field(1.0, since=2)
+        def __init__(self, /, *, n: int, prior: float = td.field(1.0, since=2)):
+            self["n"] = n
 
-        def build(self, spec):
-            self["n"] = spec.n
-
-    assert Grown.get({"n": 1}).key == old.key
+    assert Grown.get(n=1).key == old.key
     assert len(Grown.query(prior=1.0)) == 1
     assert len(Grown.query().where(prior=1.0)) == 1
     assert Grown.query().table(sizes=False)["spec.prior"].tolist() == [1.0]
@@ -117,7 +104,7 @@ def test_collection_delete(sweep):
     assert Sweep.query(status="failed").delete() == 1
     assert len(Sweep.query(status=None)) == 4
     with pytest.raises(td.BuildFailed):
-        Sweep.get({"seed": 9, "fail": True})  # rebuilt from scratch, fails again
+        Sweep.get(seed=9, fail=True)  # rebuilt from scratch, fails again
 
 
 def test_table(sweep):
@@ -143,7 +130,7 @@ def test_info_on_class_and_record(sweep):
     failed = Sweep.info(status="failed", seed=9, sizes=False)
     assert failed["status"].tolist() == ["failed"]
     assert len(Sweep.info(seed=[1, 2], varying_only=True, sizes=False)) == 2
-    record = Sweep.get({"seed": 1})
+    record = Sweep.get(seed=1)
     row = record.info(depth=1, sizes=False)
     assert len(row) == 1 and row["key"].iloc[0] == record.key[:16]
     assert "spec.seed" in row and "spec.model.lr" not in row
@@ -191,7 +178,7 @@ def test_reindex_is_used_while_fresh(sweep, monkeypatch):
     monkeypatch.setattr(index, "_scan", no_scan)
     assert len(Sweep.query()) == 4
     monkeypatch.undo()
-    Sweep.get({"seed": 7})
+    Sweep.get(seed=7)
     monkeypatch.setattr(index, "_scan", no_scan)
     with pytest.raises(AssertionError, match="scanned"):
         Sweep.query()

@@ -12,13 +12,13 @@ from _records import Square
 class Broken(td.Record):
     __record_name__ = "Broken"
 
-    def build(self, spec):
+    def __init__(self):
         raise RuntimeError("no")
 
 
 def test_ls_status_reindex(root, capsys):
-    Square.get({"n": 2})
-    Square.get({"n": 3})
+    Square.get(n=2)
+    Square.get(n=3)
     with pytest.raises(td.BuildFailed):
         Broken.get()
     assert main(["ls"]) == 0
@@ -34,7 +34,7 @@ def test_ls_status_reindex(root, capsys):
 
 
 def test_gc_removes_stale_leases_and_orphaned_builds(root, capsys, monkeypatch):
-    rec = Square.locate({"n": 4})
+    rec = Square.locate(n=4)
     lease = Lease.acquire(rec._lock, ttl=60, heartbeat=0)
     orphan = root / ".tensordir" / "tmp" / f".Square-{rec.path.name}-deadbeef"
     orphan.mkdir(parents=True)

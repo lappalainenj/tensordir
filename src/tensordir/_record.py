@@ -25,6 +25,7 @@ from ._root import get_root
 from .codecs import atomic_path, codec_for, get_codec, remove_tree
 from .dims import dims_for
 from .errors import BuildFailed, DimsError, KeyCollision, ReadOnlyError, RecordBusy
+from ._signature import Interface, interface_of
 from .spec import Spec as _Spec
 
 __all__ = ["Record", "Status", "FORMAT"]
@@ -36,10 +37,6 @@ Status = Literal["absent", "running", "done", "failed", "stale"]
 
 _REGISTRY: dict[str, type["Record"]] = {}
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.\-]*$")
-
-
-class _EmptySpec(_Spec):
-    pass
 
 
 def _now() -> str:
@@ -93,29 +90,31 @@ class _ClassOrInstance:
         return types.MethodType(self._on_instance, obj)
 
 
-class Record:
+class _RecordType(type):
+    """Calling a record type gets the record: `Fit(points, n_columns=8)` is `Fit.get(...)`."""
+
+    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
+        return cls.get(*args, **kwargs)
+
+
+class Record(metaclass=_RecordType):
     """A directory `<root>/<RecordName>/<key[:16]>/` holding `_meta.json` and the record's data.
 
-    Subclass it, declare a nested `Spec`, typed fields, and a `build` recipe:
+    `__init__` is the build. Its positional-only parameters are the inputs, its keyword-only
+    parameters the settings (the generated `Fit.Spec`):
 
     ```python
     class Fit(tensordir.Record):
-        __record_name__ = "Fit"
-
-        class Spec(tensordir.Spec):
-            n_sweeps: int
-            seed: int = 0
-
         centres: Float[np.ndarray, "n_columns n_dims"]
 
-        def build(self, spec, points):
-            self.centres = fit(points, spec.n_sweeps, spec.seed)
+        def __init__(self, points: np.ndarray, /, *, n_columns: int, seed: int = 0):
+            self.centres = fit(points, n_columns, seed)
 
-    fit = Fit.get(Fit.Spec(n_sweeps=100), points=points)  # builds once, then reopens
+    fit = Fit(points, n_columns=8)  # builds once, then reopens without running __init__
     ```
 
-    The key is the sha256 of the record type id, `schema_version`, the hashed spec fields and the
-    identity of the inputs (records by key, arrays by digest).
+    The key is the sha256 of the record type id, `schema_version`, the hashed settings and the
+    identity of the inputs by position (records by key, arrays by digest).
     """
 
     #: Type id, part of every key; defaults to the class's qualified name (without the module), so
@@ -139,19 +138,28 @@ class Record:
     root: ClassVar[str | os.PathLike | None] = None
     #: Workspace record: fields may be written, appended and deleted after the build is done (by
     #: any process; each edit holds the lease briefly). The key still names the spec and inputs,
-    #: but no longer guarantees the contents. Without a `build`, `get` creates an empty record.
+    #: but no longer guarantees the contents. Without an `__init__`, `get` creates an empty record.
     mutable: ClassVar[bool] = False
     #: Codec replacements for values written without `codec=`, by the name of the codec that
     #: would be chosen: `{"ndarray": "hdf5"}` stores arrays, including `append`ed ones, as HDF5
     #: files instead of zarr (see `tensordir.codecs.Hdf5Codec` for the trade-offs).
     codecs: ClassVar[Mapping[str, str]] = {}
 
-    Spec: ClassVar[type[_Spec]] = _EmptySpec
+    #: The settings as a frozen dataclass, generated from the keyword-only `__init__` parameters.
+    Spec: ClassVar[type[_Spec]]
+    _interface: ClassVar[Interface]
+
+    def __init__(self) -> None:
+        """The build of a record without inputs or settings: nothing to write."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        if not (isinstance(cls.Spec, type) and issubclass(cls.Spec, _Spec)):
-            raise TypeError(f"{cls.__qualname__}.Spec must subclass tensordir.Spec")
+        if "Spec" in cls.__dict__:
+            raise TypeError(
+                f"{cls.__qualname__}: declare settings as keyword-only __init__ parameters; the Spec is generated"
+            )
+        cls._interface = interface_of(cls, cls.__init__)
+        cls.Spec = cls._interface.spec
         type_id = cls.type_id()
         other = _REGISTRY.get(type_id)
         if (
@@ -196,26 +204,18 @@ class Record:
         return cls.__dict__[cache]
 
     @classmethod
-    def _coerce_spec(cls, spec: Any) -> _Spec:
-        if spec is None:
-            return cls.Spec()
-        if isinstance(spec, cls.Spec):
-            return spec
-        if isinstance(spec, Mapping):
-            return cls.Spec(**spec)
-        raise TypeError(f"{cls.__qualname__} expects a {cls.Spec.__qualname__} or a mapping, got {type(spec).__qualname__}")
+    def compute_key(cls, *inputs: Any, **settings: Any) -> str:
+        """The full sha256 key for these inputs and settings (no filesystem access)."""
+        inputs, spec, _ = cls._interface.bind(inputs, settings)
+        return cls._key_of(spec, cls._identify(inputs))
 
     @classmethod
-    def compute_key(cls, spec: Any = None, /, **inputs: Any) -> str:
-        """The full sha256 key for `spec` and `inputs` (no filesystem access)."""
-        return cls._key_of(cls._coerce_spec(spec), cls._identify(inputs))
+    def _identify(cls, inputs: Sequence[Any]) -> list:
+        names = cls._interface.inputs
+        return [canonical(v, digest_arrays=True, _path=f"inputs.{names[i]}") for i, v in enumerate(inputs)]
 
     @classmethod
-    def _identify(cls, inputs: Mapping[str, Any]) -> dict:
-        return {k: canonical(v, digest_arrays=True, _path=f"inputs.{k}") for k, v in sorted(inputs.items())}
-
-    @classmethod
-    def _key_of(cls, spec: _Spec, identity: dict) -> str:
+    def _key_of(cls, spec: _Spec, identity: list) -> str:
         return sha256(
             {"type": cls.type_id(), "schema_version": cls.schema_version, "spec": spec.hashed_dict(), "inputs": identity}
         )
@@ -244,68 +244,69 @@ class Record:
         return get_root(cls, root=root)
 
     @classmethod
-    def locate(cls, spec: Any = None, /, *, root: str | os.PathLike | None = None, **inputs: Any) -> Self:
-        """The record for `spec` and `inputs`, whatever its status; nothing is built."""
-        spec = cls._coerce_spec(spec)
+    def locate(cls, *inputs: Any, root: str | os.PathLike | None = None, **settings: Any) -> Self:
+        """The record for these inputs and settings, whatever its status; nothing is built."""
+        inputs, spec, transients = cls._interface.bind(inputs, settings)
         key = cls._key_of(spec, cls._identify(inputs))
         base = cls.resolve_root(root)
-        return cls._new(base / cls.dirname() / key[:16], key=key, managed_root=base, spec=spec)
+        record = cls._new(base / cls.dirname() / key[:16], key=key, managed_root=base, spec=spec)
+        record.__dict__["_call"] = (inputs, transients)
+        return record
 
     # ----- build or reopen -------------------------------------------------------------------
 
     @classmethod
     def get(
         cls,
-        spec: Any = None,
-        /,
-        *,
+        *inputs: Any,
         root: str | os.PathLike | None = None,
         block: bool = True,
         timeout: float | None = None,
         retry_failed: bool = False,
-        **inputs: Any,
+        **settings: Any,
     ) -> Self:
-        """Return the finished record for `spec` and `inputs`, building it if needed.
+        """Return the finished record for these inputs and settings, running `__init__` to build
+        it if needed; `Fit(...)` is `Fit.get(...)` without the options.
 
         If another process is building it, wait (up to `timeout` seconds; `block=False` raises
         `RecordBusy` instead). A previous failure raises `BuildFailed` unless `retry_failed`.
         """
-        record = cls.locate(spec, root=root, **inputs)
-        return record._obtain(inputs, block=block, timeout=timeout, retry_failed=retry_failed)
+        record = cls.locate(*inputs, root=root, **settings)
+        return record._obtain(block=block, timeout=timeout, retry_failed=retry_failed)
 
     @classmethod
-    def lookup(cls, spec: Any = None, /, *, root: str | os.PathLike | None = None, **inputs: Any) -> Self | None:
-        """The finished record for `spec` and `inputs`, or None."""
-        record = cls.locate(spec, root=root, **inputs)
+    def lookup(cls, *inputs: Any, root: str | os.PathLike | None = None, **settings: Any) -> Self | None:
+        """The finished record for these inputs and settings, or None; nothing is built."""
+        record = cls.locate(*inputs, root=root, **settings)
         return record if record.status == "done" else None
 
     @classmethod
     def at(
         cls,
         path: str | os.PathLike,
-        spec: Any = None,
-        /,
-        *,
+        *inputs: Any,
         block: bool = True,
         timeout: float | None = None,
         retry_failed: bool = False,
-        **inputs: Any,
+        **settings: Any,
     ) -> Self:
-        """A record in a hand-named directory.
+        """The record in a hand-named directory.
 
-        Without a spec, open the record at `path` (as its registered class when called on
-        `Record`). With a spec, build it there if absent; a different record there is an error.
+        `td.Record.at(path)` opens whatever record is there, as its registered class. On a record
+        type, `Fit.at(path, *inputs, **settings)` builds that record at `path` if the directory
+        holds none, and opens it otherwise; a different record there raises `KeyCollision`.
         """
         path = Path(path).expanduser().absolute()
-        if spec is None and not inputs:
+        if cls is Record:
             meta = _read_json(path / META)
             if meta is None:
                 raise FileNotFoundError(f"no record at {path}")
-            klass = _REGISTRY.get(meta["type"], cls) if cls is Record else cls
+            klass = _REGISTRY.get(meta["type"], cls)
             return klass._new(path, key=meta["key"], managed_root=_managed_root(path, meta["key"]))
-        spec = cls._coerce_spec(spec)
+        inputs, spec, transients = cls._interface.bind(inputs, settings)
         record = cls._new(path, key=cls._key_of(spec, cls._identify(inputs)), managed_root=None, spec=spec)
-        return record._obtain(inputs, block=block, timeout=timeout, retry_failed=retry_failed)
+        record.__dict__["_call"] = (inputs, transients)
+        return record._obtain(block=block, timeout=timeout, retry_failed=retry_failed)
 
     @classmethod
     def query(cls, *, root: str | os.PathLike | None = None, status: str | None = "done", **filters: Any):
@@ -350,25 +351,10 @@ class Record:
     """
     del _info_of_type, _info_of_record
 
-    def build(self, spec: Any, **inputs: Any) -> None:
-        """The recipe. Write fields with `self.name = value`, `self["name"] = value` or `append`.
-
-        Workspace records (`mutable = True`) may leave it out: their fields come later."""
-        if type(self).mutable:
-            return
-        raise NotImplementedError(f"{type(self).__qualname__} does not define build()")
-
-    def _obtain(
-        self,
-        inputs: dict,
-        *,
-        block: bool,
-        timeout: float | None,
-        retry_failed: bool,
-        recipe: Callable[[], None] | None = None,
-    ) -> Self:
-        """Wait for or run the build; `recipe` replaces `self.build(spec, **inputs)` if given."""
+    def _obtain(self, *, block: bool, timeout: float | None, retry_failed: bool) -> Self:
+        """Wait for the build, or take the lease and run `__init__` as the build."""
         cls = type(self)
+        inputs, transients = self.__dict__.pop("_call")
         deadline = None if timeout is None else time.monotonic() + timeout
         delay = 0.01
         checked = False
@@ -389,7 +375,7 @@ class Record:
                         return self
                     if meta and meta["status"] == "failed" and not retry_failed:
                         raise BuildFailed(self, meta.get("error") or {})
-                    self._run_build(inputs, previous=meta, recipe=recipe)
+                    self._run_build(inputs, transients, previous=meta)
                 return self
             if not block:
                 raise RecordBusy(self)
@@ -398,18 +384,19 @@ class Record:
             time.sleep(delay)
             delay = min(delay * 2, 2.0)
 
-    def _check_upstream(self, inputs: dict) -> None:
-        """Raise before a build if a record among the spec fields or inputs is not done."""
-        for name, value in [("spec", self.spec), *sorted(inputs.items())]:
+    def _check_upstream(self, inputs: tuple) -> None:
+        """Raise before a build if a record among the settings or inputs is not done."""
+        names = type(self)._interface.inputs
+        for name, value in [("spec", self.spec), *zip(names, inputs)]:
             for record in _records_in(value):
                 status = record.status
                 if status != "done":
                     raise ValueError(
-                        f"cannot build {self!r}: its {'spec holds' if name == 'spec' else f'input {name!r} is or holds'} "
-                        f"{record!r}, which is {status}; build it first with {type(record).__qualname__}.get(...)"
+                        f"cannot build {self!r}: its {'settings hold' if name == 'spec' else f'input {name!r} is or holds'} "
+                        f"{record!r}, which is {status}; build it first"
                     )
 
-    def _run_build(self, inputs: dict, previous: dict | None, recipe: Callable[[], None] | None = None) -> None:
+    def _run_build(self, inputs: tuple, transients: dict, previous: dict | None) -> None:
         cls = type(self)
         t0 = time.monotonic()
         if cls.in_place:
@@ -428,7 +415,7 @@ class Record:
             "spec_type": f"{type(self.spec).__module__}:{type(self.spec).__qualname__}",
             "spec": self.spec.to_dict(),
             "inputs": cls._identify(inputs),
-            "upstream": {r.key: str(r.path) for v in (self.spec, inputs) for r in _records_in(v)},
+            "upstream": {r.key: str(r.path) for v in (self.spec, list(inputs)) for r in _records_in(v)},
             "status": "running",
             "fields": fields,
             "created": (previous or {}).get("created") or _now(),
@@ -442,10 +429,10 @@ class Record:
         self.__dict__.update(_dir=workdir, _meta=meta, _writable=True)
         try:
             self._write_meta()
-            if recipe is None:
-                self.build(self.spec, **inputs)
-            else:
-                recipe()
+            if cls.__init__ is Record.__init__ and not cls.mutable:
+                raise NotImplementedError(f"{cls.__qualname__} defines no __init__; only workspace records may leave it out")
+            settings = {name: getattr(self.spec, name) for name in cls._interface.settings}
+            cls.__init__(self, *inputs, **settings, **transients)
             self._check_sizes()
         except Exception as exc:
             self._writable = False
@@ -575,9 +562,9 @@ class Record:
         return meta.get("error") if meta else None
 
     @property
-    def inputs(self) -> dict[str, Any]:
-        """The keyword inputs this record was built from, by name: records reopened, arrays as
-        their `Digest`, other values in canonical form.
+    def inputs(self) -> tuple[Any, ...]:
+        """The inputs this record was built from, in order: records reopened, arrays as their
+        `Digest`, other values in canonical form.
 
         **Experimental:** may change or be removed; see Design, Experimental features.
 
@@ -586,7 +573,7 @@ class Record:
         status is `absent`.
         """
         meta = self.meta
-        return {name: _revive_tags(value, meta.get("upstream", {})) for name, value in meta["inputs"].items()}
+        return tuple(_revive_tags(value, meta.get("upstream", {})) for value in meta["inputs"])
 
     def lineage(self) -> list["Record"]:
         """Every record this one was built from, as an input or a spec field, directly or through
@@ -694,7 +681,7 @@ class Record:
         cls = type(self)
         if not cls.mutable:
             raise ReadOnlyError(
-                f"{self!r} is read-only: write fields inside build(), or set `mutable = True` on "
+                f"{self!r} is read-only: write fields inside __init__, or set `mutable = True` on "
                 f"{cls.__qualname__} to make it a workspace record"
             )
         status = self.status
@@ -946,6 +933,10 @@ class Record:
             )
             out.append("</tbody></table>")
         return "".join(out)
+
+
+Record._interface = interface_of(Record, Record.__init__)
+Record.Spec = Record._interface.spec
 
 
 def _records_in(value: Any) -> Iterator[Record]:

@@ -74,14 +74,11 @@ def test_wrappers_everywhere(root):
     class Layered(td.Record):
         __record_name__ = "WhereLayered"
 
-        class Spec(td.Spec):
-            layers: list[int]
-
-        def build(self, spec):
-            self["n"] = len(spec.layers)
+        def __init__(self, /, *, layers: list[int]):
+            self["n"] = len(layers)
 
     for layers in ([8], [16], [8, 16]):
-        Layered.get({"layers": layers})
+        Layered.get(layers=layers)
 
     def found(collection):
         return sorted(tuple(r.spec.layers) for r in collection)

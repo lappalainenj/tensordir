@@ -7,9 +7,10 @@ need it again, found by the parameters that produced it. File names that encode 
 `joblib.Memory` computes twice when two jobs ask at once and cannot be searched by parameters. An
 experiment-tracking server needs setup and stores arrays as files it cannot look into.
 
-tensordir names each result by the parameters that produced it. You declare the parameters in a
-typed spec and write a `build` method; asking for a result reopens it if it exists and builds it
-otherwise, once, even when many jobs on a shared filesystem ask at the same time. Arrays are
+tensordir names each result by the parameters that produced it. You write the computation as the
+`__init__` of a record class, with its inputs before `/` and its settings after `*`; calling the
+class reopens the result if it exists and runs `__init__` otherwise, once, even when many jobs on
+a shared filesystem ask at the same time. Arrays are
 stored as zarr with named dimensions, so you can query results by their parameters and read a
 parameter sweep back as one labeled xarray array.
 
@@ -23,7 +24,7 @@ parameter sweep back as one labeled xarray array.
 In code:
 
 ```python
-fit = Fit.get(Fit.Spec(n_columns=8), points=points)   # build or reopen
+fit = Fit(points, n_columns=8)                        # build or reopen
 fit.centres                                           # numpy array (declared type)
 fit["centres"]                                        # lazy zarr.Array
 Fit.query(seed=0).table()                             # one row per record
@@ -32,8 +33,8 @@ Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray r
 
 | Need | API |
 |---|---|
-| Declare inputs that identify a result | `Spec`, `field(hashed=False)`, `field(since=...)`, `Digest` |
-| Build or reopen | `Record.get`, `lookup`, `locate`, `at` |
+| Declare what identifies a result | `__init__` inputs (before `/`) and settings (after `*`), `field(hashed=False)`, `field(since=...)`, `transient`, `Digest` |
+| Build or reopen | `Fit(...)`, `Record.get`, `lookup`, `locate`, `at` |
 | Store values | `self.x = ...`, `self["x"] = ...`, `write(codec=...)`, `append` |
 | Name array axes | jaxtyping field annotations, `Dims`, `register_dims` |
 | Work with many records | `Record.query`, `Record.info`, `Collection.where`, `Collection.table`, `Collection.map`, `reindex` |
