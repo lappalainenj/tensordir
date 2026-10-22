@@ -89,6 +89,7 @@ docs = [
     "mkdocs-jupyter>=0.25",
     "mkdocs-material>=9.7.7",
     "mkdocstrings[python]>=1.0.7",
+    "pillow>=12.3.0",
     "tensordir[all]",
 ]
 torch = [

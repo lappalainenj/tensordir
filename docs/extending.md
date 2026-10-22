@@ -791,7 +791,6 @@ td.set_root("results")
 
 
 class Run(td.Record):
-    __record_name__ = "Run"
     mutable = True  # fields may change after the (empty) build
 
     def __init__(self, /, *, lr: float = 0.1):
@@ -844,7 +843,6 @@ write_deltalake("synapses", synapses(2000, 0))  # e.g. gs://.../synapses_pni_2/p
 
 
 class Edges(td.Record):
-    __record_name__ = "Edges"
 
     def __init__(self, /, *, synapses: td.DeltaRef, min_size: int = 0):
         table = synapses.to_table(  # only these columns and rows are read

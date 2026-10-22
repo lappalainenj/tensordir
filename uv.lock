@@ -2513,6 +2513,7 @@ docs = [
     { name = "mkdocs-jupyter" },
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
+    { name = "pillow" },
     { name = "tensordir", extra = ["all"] },
 ]
 torch = [
@@ -2558,6 +2559,7 @@ docs = [
     { name = "mkdocs-jupyter", specifier = ">=0.25" },
     { name = "mkdocs-material", specifier = ">=9.7.7" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.7" },
+    { name = "pillow", specifier = ">=12.3.0" },
     { name = "tensordir", extras = ["all"] },
 ]
 torch = [{ name = "torch", specifier = ">=2.4" }]

@@ -7,7 +7,7 @@ import pytest
 
 EXAMPLES = Path(__file__).parents[1] / "docs" / "examples"
 NOTEBOOKS = sorted(EXAMPLES.glob("*.ipynb"))
-REQUIRED = ["nbclient", "nbformat", "ipykernel", "xarray", "pandas", "pyarrow", "joblib", "jaxtyping", "h5py", "yaml", "deltalake", "duckdb"]
+REQUIRED = ["nbclient", "nbformat", "ipykernel", "xarray", "pandas", "pyarrow", "joblib", "jaxtyping", "h5py", "yaml", "deltalake", "duckdb", "PIL"]
 
 
 @pytest.mark.parametrize("path", NOTEBOOKS, ids=[p.stem for p in NOTEBOOKS])
