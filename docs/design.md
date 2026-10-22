@@ -187,6 +187,21 @@ their keys.
 - A subclass without its own `__init__` inherits the interface; one with its own `__init__` has
   its own.
 
+## Stages
+
+`td.Stages(name=td.Stage(after=..., repeat=..., required=...))` declares the steps of a build;
+the instance decorates each stage method. `_meta.json` stores, per stage, how often it ran, when
+it last finished and which fields it added.
+
+- A stage before the stages it runs after raises `StageOrderError`; a non-repeating stage called
+  twice in one build raises too. A build that ends without every required stage fails.
+- A record type with stages builds in place unless it sets `in_place = False`, so a failed build
+  keeps its stage progress. `retry_failed=True` reruns `__init__`, and stage calls that finished
+  in an earlier attempt return at once: the first `calls` calls of each stage are skipped.
+- An optional stage called on a finished record takes the lease, may add fields and rewrite the
+  fields it added before, and stamps `modified`; it never changes the status. A required stage
+  called after the build raises `ReadOnlyError`.
+
 ## Concurrency on shared filesystems
 
 - **Leases.** A lease is a directory created with `mkdir`, which is atomic on local disks, NFS and

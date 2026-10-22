@@ -22,6 +22,12 @@
 
 ::: tensordir.transient
 
+::: tensordir.Stages
+
+::: tensordir.Stage
+
+::: tensordir.StageOrderError
+
 ::: tensordir.Collection
 
 ::: tensordir.where

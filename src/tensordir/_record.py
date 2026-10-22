@@ -26,6 +26,7 @@ from .codecs import atomic_path, codec_for, get_codec, remove_tree
 from .dims import dims_for
 from .errors import BuildFailed, DimsError, KeyCollision, ReadOnlyError, RecordBusy
 from ._signature import Interface, interface_of
+from ._stages import check_required, stages_of
 from .spec import Spec as _Spec
 
 __all__ = ["Record", "Status", "FORMAT"]
@@ -160,6 +161,12 @@ class Record(metaclass=_RecordType):
             )
         cls._interface = interface_of(cls, cls.__init__)
         cls.Spec = cls._interface.spec
+        for stages in stages_of(cls):
+            for name in stages.stages:
+                if hasattr(Record, name):
+                    raise TypeError(f"{cls.__qualname__}: stage {name!r} shadows Record.{name}; rename the stage")
+        if stages_of(cls) and "in_place" not in cls.__dict__:
+            cls.in_place = True  # so a failed staged build resumes where it stopped
         type_id = cls.type_id()
         other = _REGISTRY.get(type_id)
         if (
@@ -426,13 +433,16 @@ class Record(metaclass=_RecordType):
             "error": None,
             "provenance": _provenance.collect(cls),
         }
-        self.__dict__.update(_dir=workdir, _meta=meta, _writable=True)
+        if cls.in_place and previous and previous.get("stages"):
+            meta["stages"] = previous["stages"]
+        self.__dict__.update(_dir=workdir, _meta=meta, _writable=True, _stage_calls={})
         try:
             self._write_meta()
             if cls.__init__ is Record.__init__ and not cls.mutable:
                 raise NotImplementedError(f"{cls.__qualname__} defines no __init__; only workspace records may leave it out")
             settings = {name: getattr(self.spec, name) for name in cls._interface.settings}
             cls.__init__(self, *inputs, **settings, **transients)
+            check_required(self)
             self._check_sizes()
         except Exception as exc:
             self._writable = False
@@ -700,6 +710,31 @@ class Record(metaclass=_RecordType):
             self.__dict__.update(_meta=None, _done_meta=None)
             lease.release()
 
+    @contextmanager
+    def _stage_edit(self, stage: str) -> Iterator[dict]:
+        """Run optional `stage` on a finished record: under the lease, writable, and limited to
+        new fields and the fields this stage wrote before. Yields the stage progress."""
+        lease = self._edit_lease()
+        try:
+            meta = _read_json(self._path / META)
+            if meta is None or meta.get("key") != self.key:
+                raise ReadOnlyError(f"{self!r} disappeared or was replaced")
+            self.__dict__.update(_dir=self._path, _meta=meta, _writable=True, _stage_owner=stage)
+            yield meta.setdefault("stages", {})
+            meta["modified"] = _now()
+            self._write_meta()
+        finally:
+            self.__dict__.update(_meta=None, _done_meta=None, _writable=False, _stage_owner=None)
+            lease.release()
+
+    def _check_owner(self, name: str) -> None:
+        """Inside an optional stage on a finished record, refuse fields the stage did not add."""
+        stage = self.__dict__.get("_stage_owner")
+        if stage is None or name not in self._meta["fields"]:
+            return
+        if name not in self._meta.get("stages", {}).get(stage, {}).get("fields", ()):
+            raise ReadOnlyError(f"{self!r}: optional stage {stage!r} may not rewrite field {name!r}")
+
     def _edit_lease(self) -> Lease:
         cls = type(self)
         deadline = time.monotonic() + cls.lease_ttl
@@ -731,6 +766,7 @@ class Record(metaclass=_RecordType):
         if codec is None and chosen.name in type(self).codecs:
             chosen = get_codec(type(self).codecs[chosen.name])
         with self._edit() as fields:
+            self._check_owner(name)
             old = fields.get(name)
             if old is not None and old.get("append") and codec is None and chosen.name == old["codec"]:
                 chosen.delete(self._dir, name, old)
@@ -763,6 +799,7 @@ class Record(metaclass=_RecordType):
         if dims is None and annotation is not None:
             dims = dims_for(annotation, type(self).dims)
         with self._edit() as fields:
+            self._check_owner(name)
             old = fields.get(name)
             if old is not None and not old.get("append"):
                 raise ValueError(f"{name!r} was written with write(); append() needs a field created by append()")
@@ -774,6 +811,7 @@ class Record(metaclass=_RecordType):
     def delete_field(self, name: str) -> None:
         """Remove field `name` (inside `build`, or on a workspace record); also `del record.name`."""
         with self._edit() as fields:
+            self._check_owner(name)
             info = fields.pop(name, None)
             if info is None:
                 raise KeyError(f"{self!r} has no field {name!r}")

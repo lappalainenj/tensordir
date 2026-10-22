@@ -11,6 +11,7 @@ packages (named in the `# requires:` line) are missing.
 | build a record from other records or arrays | inputs before `/`, or nested specs |
 | rebuild domain objects from a record | a `View` subclass with `cached_method` and `memory` |
 | store event tables larger than memory | a `pyarrow.RecordBatchReader` field, read as a dataset |
+| split a long build into resumable steps | `td.Stages`, `td.Stage` |
 | let a record change after its build | a `mutable = True` record |
 | depend on a Delta table or parquet directory outside the root | `td.DeltaRef`, `td.ParquetRef` |
 | change how joblib stores cached results | a registered `Codec`, or a `td.StoreBackend` subclass |
@@ -653,6 +654,63 @@ assert list(view.record.load("chkpt_step")) == [20, 40, 60]
 ensemble = td.Collection(Network(seed=seed) for seed in range(3))
 stacked = ensemble.map(lambda record: NetworkView(record).responses(x), dim="network", coords=["seed"])
 assert stacked.dims == ("network", "stimulus") and list(stacked["seed"].values) == [0, 1, 2]
+```
+
+## Builds in stages
+
+A long build can be split into named stages declared with `td.Stages`. Each stage method is
+decorated with the `Stages` instance and returns the record, so stages chain. A stage runs only
+after the stages named in `after`; the build fails unless every required stage ran; a stage
+declared with `repeat=True` may run many times (epochs). A record with stages builds in place, so
+a failed build resumed with `retry_failed=True` skips the stages that finished and as many
+repeated calls as finished before. Stages therefore hand results on through fields, not private
+attributes. An optional stage (`required=False`) may also run after the record is `done`, adding
+fields without touching the others. Stage names may not shadow `Record` methods such as `load`.
+
+```python
+import numpy as np
+
+import tensordir as td
+
+td.set_root("results")
+
+
+class Fit(td.Record):
+    stages = td.Stages(
+        prepare=td.Stage(),
+        solve=td.Stage(after="prepare"),
+        epoch=td.Stage(after="solve", repeat=True),  # one call per epoch
+        preview=td.Stage(after="solve", required=False),
+    )
+
+    def __init__(self, /, *, n_points: int = 200, n_epochs: int = 3, seed: int = 0):
+        self.prepare(n_points, seed).solve()
+        for _ in range(n_epochs):
+            self.epoch()
+
+    @stages
+    def prepare(self, n_points, seed):
+        rng = np.random.default_rng(seed)
+        self.xy = rng.normal(size=(n_points, 2))
+
+    @stages
+    def solve(self):
+        self.centre = self.load("xy").mean(axis=0)
+
+    @stages
+    def epoch(self):
+        step = len(self.load("loss")) if "loss" in self else 0
+        self.append("loss", [1.0 / (step + 1)])
+
+    @stages
+    def preview(self):
+        self.summary = {"centre": self.load("centre").tolist()}
+
+
+fit = Fit()
+assert fit.meta["stages"]["epoch"]["calls"] == 3
+fit.preview()  # an optional stage on the finished record
+assert "summary" in fit and fit.status == "done"
 ```
 
 ## Records that change after the build
