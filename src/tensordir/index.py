@@ -1,4 +1,4 @@
-"""`<root>/.tensordir/index.parquet`: one row per record, rebuilt from the `_record.json` files.
+"""`<root>/.tensordir/index.parquet`: one row per record, rebuilt from the `_meta.json` files.
 
 A type directory's rows are trusted only while the directory's mtime equals the mtime recorded at
 reindex time. Records enter and leave a type directory by rename, which updates that mtime, so a

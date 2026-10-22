@@ -74,7 +74,7 @@ def test_delta_ref_in_specs_and_records(root, delta_table):
     assert Edges.Spec.from_dict(spec.to_dict()).synapses == first  # revived as a DeltaRef
     assert Edges.compute_key(spec) != Edges.compute_key(spec.replace(synapses=td.DeltaRef(delta_table, version=1)))
     record = Edges.get(spec)
-    assert "secret" not in (record.path / "_record.json").read_text()
+    assert "secret" not in (record.path / "_meta.json").read_text()
     stored = record["synapses"]
     assert isinstance(stored, ds.Dataset) and stored.schema.names == ["pre", "post", "size"]
     assert record.load("synapses").num_rows == first.to_table(filter={"size": ">0.0"}).num_rows

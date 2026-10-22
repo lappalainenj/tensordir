@@ -91,7 +91,7 @@ class Codec:
 
 
 class FileCodec(Codec):
-    """A codec storing one file `<name><suffix>` next to `_record.json`."""
+    """A codec storing one file `<name><suffix>` next to `_meta.json`."""
 
     suffix: ClassVar[str]
 

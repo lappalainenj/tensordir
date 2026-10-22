@@ -82,7 +82,7 @@ print(spread(fit))
 results/
 ├── Fit/
 │   └── 3f2a9c0e1b7d4a55/          # first 16 hex digits of the sha256 key
-│       ├── _record.json           # key, spec, inputs, status, fields, timings, provenance
+│       ├── _meta.json           # key, spec, inputs, status, fields, timings, provenance
 │       ├── data.zarr/centres      # zarr v3 array, dimension_names ["column", "dim"]
 │       └── summary.json
 └── .tensordir/                    # leases, temporary builds, index.parquet

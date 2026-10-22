@@ -433,12 +433,12 @@ Use nested specs when the upstream record is cheap to describe by its settings a
 query by them; use inputs when the upstream record has inputs of its own, is built elsewhere,
 or should stay a separate unit of work. A spec field may also hold a record (`points: Points`):
 it enters the key like an input, is stored with its path and reopens as a record from
-`_record.json`.
+`_meta.json`.
 
 ### Inputs
 
 Keyword arguments to `get` beyond the spec are inputs: records enter by type and key, arrays by
-digest, other values by canonical form. `_record.json` also stores the path of each input record,
+digest, other values by canonical form. `_meta.json` also stores the path of each input record,
 so a finished record can reopen its inputs (`record.inputs`) and walk its whole upstream graph
 (`record.lineage()`, each record once, upstream first). An input record that is no longer at its
 stored path is looked up under its type's current root, so a copied root keeps its links once
@@ -858,7 +858,7 @@ print(Edges.query().table(sizes=False)[["key", "spec.synapses", "spec.min_size"]
 
 On GCS, pass credentials for reading only:
 `td.DeltaRef("gs://bucket/path", version=3, storage_options={"google_service_account_path": ...})`.
-They stay out of keys and `_record.json`. For a directory of parquet files, use
+They stay out of keys and `_meta.json`. For a directory of parquet files, use
 `td.ParquetRef(path)`. Its version is a digest: a SHA-256 fingerprint of the sorted list of
 `(relative path, size)` pairs of the data files. The digest is stored in the spec of each record
 that uses the reference, so a changed directory gives new keys, and opening a reference whose

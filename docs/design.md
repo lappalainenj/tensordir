@@ -8,8 +8,10 @@ A record's key is the sha256 of the canonical JSON of
 {"inputs": {...}, "schema_version": 0, "spec": {...}, "type": "Fit"}
 ```
 
-- `type` is `__record_name__`, or `module:qualname` if unset. Set it: the fallback changes when a
-  class moves, and classes defined in notebooks have module `__main__`.
+- `type` is `__record_name__`, else the class's qualified name without its module, so moving a
+  class between modules keeps its keys. Two classes in different modules with the same name and
+  no `__record_name__` raise `TypeError`; set `__record_name__` on one of them, or to keep keys
+  across a class rename.
 - `schema_version` is a class attribute. Bump it when a recipe change invalidates old results.
 - `spec` holds the hashed fields of the spec. Canonical JSON sorts keys, turns numpy scalars into
   Python scalars and paths into POSIX strings, writes floats in their shortest round-trip form,
@@ -18,7 +20,7 @@ A record's key is the sha256 of the canonical JSON of
 - `inputs` are the keyword arguments of `get` beyond the spec. Records enter by type and key,
   arrays by digest, and other values by canonical form. A workspace record also enters with the
   time of its last edit (see [Workspace records as inputs](extending.md#workspace-records-as-inputs)).
-  Paths never enter the key; `_record.json` stores the path of every input record under
+  Paths never enter the key; `_meta.json` stores the path of every input record under
   `upstream`, and a record in a spec field with its path, so both can be reopened.
 
 Spec class names don't enter the key, so renaming a spec class is free. Two field options
@@ -70,23 +72,23 @@ trees. The root never enters the key: the same record can be copied between root
 ## Layout and lifecycle
 
 ```
-<root>/<RecordName>/<key[:16]>/_record.json   # key, spec, inputs, status, fields, provenance
+<root>/<RecordName>/<key[:16]>/_meta.json   # key, spec, inputs, status, fields, provenance
 <root>/<RecordName>/<key[:16]>/data.zarr/     # arrays and xarray groups (zarr v3)
 <root>/<RecordName>/<key[:16]>/<name>.json|.parquet|.safetensors|.h5|.pkl
 <root>/.tensordir/locks/  tmp/  index.parquet
 ```
 
-`_record.json` stores the full key, so a 16-hex prefix collision raises `KeyCollision` instead of
+`_meta.json` stores the full key, so a 16-hex prefix collision raises `KeyCollision` instead of
 returning the wrong record. Provenance covers the host, pid, user, Slurm/LSF job id, Python and
 package versions, argv, the git commit and dirty flag of the repository defining the record
 class, and those of tensordir's own repository when it is installed from a checkout.
 
 `Record.get` loops until it can return a `done` record:
 
-1. Read `_record.json`. If the status is `done`, return the record. If it is `failed`, raise
+1. Read `_meta.json`. If the status is `done`, return the record. If it is `failed`, raise
    `BuildFailed` with the stored traceback, unless `retry_failed=True`.
 2. Try to take the lease (`mkdir` of the lock directory, then `owner.json`). On success, check
-   again, run `build` in `.tensordir/tmp/...`, write `_record.json`, and rename the directory
+   again, run `build` in `.tensordir/tmp/...`, write `_meta.json`, and rename the directory
    into place.
 3. Otherwise wait with exponential backoff (capped at 2 s), up to `timeout`. With `block=False`,
    raise `RecordBusy` instead.
@@ -130,13 +132,13 @@ for the use datamate served: an object (a trainer, a solver) holds a record and 
 checkpoints and summaries into it over time. Rules:
 
 - Without a `build`, `get` creates an empty `done` record; edits start right away.
-- Each edit takes the record's lease, re-reads `_record.json`, writes the field, stores the new
+- Each edit takes the record's lease, re-reads `_meta.json`, writes the field, stores the new
   manifest atomically with a `modified` timestamp, and releases the lease. Edits from many
   handles, threads or processes therefore never lose each other's fields; the last write to the
   same field wins.
 - Edits need status `done`. A record that is `running` (being built elsewhere), `failed` or
   `stale` raises `ReadOnlyError`.
-- Handles notice edits by the mtime of `_record.json`; immutable records cache their manifest
+- Handles notice edits by the mtime of `_meta.json`; immutable records cache their manifest
   forever.
 - Writing an array over a field created by `append` replaces its rows and keeps it appendable.
 - Dimension sizes are checked at the end of a build, not on later edits.
@@ -282,7 +284,7 @@ Delta table version, which Delta can still read until it is vacuumed.
   and version, so a new table version gives new keys, and old records stay valid for the old
   snapshot. Local paths become absolute URIs.
 - `storage_options` (credentials) and the parquet `filesystem` are not identity: they never enter
-  keys, `_record.json` or reprs. A reference revived from a stored spec has none; pass them again
+  keys, `_meta.json` or reprs. A reference revived from a stored spec has none; pass them again
   with `dataclasses.replace(ref, storage_options=...)`, or rely on ambient credentials.
 - Reads are lazy: `dataset()` gives a `pyarrow.dataset.Dataset`; `to_table`, `to_pandas`,
   `to_batches`, `to_reader` and `scanner` take `columns=` and `filter=`, and `duckdb()` and

@@ -31,7 +31,7 @@ def test_get_builds_once_then_reopens(root, monkeypatch):
 def test_layout_and_metadata(root):
     rec = Square.get(Square.Spec(n=3, scale=2.0))
     assert rec.path == root / "Square" / rec.key[:16]
-    meta = json.loads((rec.path / "_record.json").read_text())
+    meta = json.loads((rec.path / "_meta.json").read_text())
     assert meta["key"] == rec.key and len(rec.key) == 64
     assert meta["type"] == "Square" and meta["status"] == "done" and meta["schema_version"] == 0
     assert meta["spec"] == {"n": 3, "scale": 2.0, "device": "cpu"}
@@ -184,13 +184,22 @@ def test_schema_version_changes_keys(root):
     assert A.compute_key() != B.compute_key()
 
 
-def test_type_id_defaults_to_module_qualname():
+def test_type_id_defaults_to_qualname():
     class Local(td.Record):
         pass
 
-    assert Local.type_id() == f"{__name__}:test_type_id_defaults_to_module_qualname.<locals>.Local"
-    assert Local.dirname() == "test_type_id_defaults_to_module_qualname._locals_.Local"
+    assert Local.type_id() == "test_type_id_defaults_to_qualname.<locals>.Local"
+    assert Local.dirname() == "test_type_id_defaults_to_qualname._locals_.Local"
     assert Square.type_id() == "Square"
+
+
+def test_implicit_type_ids_collide_across_modules():
+    first = type("Twin", (td.Record,), {"__module__": "pkg.a", "__qualname__": "Twin"})
+    with pytest.raises(TypeError, match="set __record_name__"):
+        type("Twin", (td.Record,), {"__module__": "pkg.b", "__qualname__": "Twin"})
+    again = type("Twin", (td.Record,), {"__module__": "pkg.a", "__qualname__": "Twin"})  # a redefinition
+    named = type("Twin", (td.Record,), {"__module__": "pkg.c", "__qualname__": "Twin", "__record_name__": "Twin"})
+    assert first.type_id() == again.type_id() == named.type_id() == "Twin"
 
 
 def test_pickle_reopens_by_identity(root):

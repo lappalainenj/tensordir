@@ -9,7 +9,7 @@ mutable folder and a reader. tensordir splits those roles:
 |---|---|---|
 | `Directory` subclass with `__init__(self, ...)` | `Record` subclass with `build(self, spec, **inputs)` | a recipe and its result |
 | a class holding `self.dir = Directory(config)` and writing to it (flyvis `Solver`) | `@td.record` class, or a `mutable = True` record held as `self.record` | an object that fills a record over time |
-| `config` (`Namespace`), `_meta.yaml` | `Spec` (frozen dataclass), `_record.json` | what identifies a result |
+| `config` (`Namespace`), `_meta.yaml` | `Spec` (frozen dataclass), `_meta.json` | what identifies a result |
 | `Directory(config)` / `Directory(path, config)` | `Record.get(spec)` / `Record.at(path, spec)` | build or reopen |
 | list of directories, `info(Type)` | `Collection` from `Record.query(...)`, `Record.info(...)` | many results |
 | `NetworkView`, `CheckpointedNetwork` (flyvis) | `View` | derived objects and caches |

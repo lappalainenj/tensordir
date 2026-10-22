@@ -30,7 +30,7 @@ class RecordBusy(TensordirError, RuntimeError):
 
 
 class BuildFailed(TensordirError, RuntimeError):
-    """The record's last build raised; its traceback is stored in `_record.json`."""
+    """The record's last build raised; its traceback is stored in `_meta.json`."""
 
     def __init__(self, record, error: dict):
         self.record = record

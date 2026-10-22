@@ -30,7 +30,7 @@ from .spec import Spec as _Spec
 __all__ = ["Record", "Status", "FORMAT"]
 
 FORMAT = 1
-META = "_record.json"
+META = "_meta.json"
 INTERNAL = ".tensordir"
 Status = Literal["absent", "running", "done", "failed", "stale"]
 
@@ -94,7 +94,7 @@ class _ClassOrInstance:
 
 
 class Record:
-    """A directory `<root>/<RecordName>/<key[:16]>/` holding `_record.json` and the record's data.
+    """A directory `<root>/<RecordName>/<key[:16]>/` holding `_meta.json` and the record's data.
 
     Subclass it, declare a nested `Spec`, typed fields, and a `build` recipe:
 
@@ -118,7 +118,9 @@ class Record:
     identity of the inputs (records by key, arrays by digest).
     """
 
-    #: Stable type id; defaults to "module:qualname". Set it so keys survive moves and renames.
+    #: Type id, part of every key; defaults to the class's qualified name (without the module), so
+    #: keys survive moving the class between modules. Set it to keep keys across a class rename,
+    #: or when two modules define classes with the same name.
     __record_name__: ClassVar[str]
     #: Bump to invalidate every key of this record type after an incompatible recipe change.
     schema_version: ClassVar[int] = 0
@@ -150,13 +152,25 @@ class Record:
         super().__init_subclass__(**kwargs)
         if not (isinstance(cls.Spec, type) and issubclass(cls.Spec, _Spec)):
             raise TypeError(f"{cls.__qualname__}.Spec must subclass tensordir.Spec")
-        _REGISTRY[cls.type_id()] = cls
+        type_id = cls.type_id()
+        other = _REGISTRY.get(type_id)
+        if (
+            other is not None
+            and other.__module__ != cls.__module__
+            and "__record_name__" not in cls.__dict__
+            and "__record_name__" not in other.__dict__
+        ):
+            raise TypeError(
+                f"record type id {type_id!r} is used by {other.__module__}.{other.__qualname__} and "
+                f"{cls.__module__}.{cls.__qualname__}; set __record_name__ on one of them"
+            )
+        _REGISTRY[type_id] = cls
 
     # ----- identity -------------------------------------------------------------------------
 
     @classmethod
     def type_id(cls) -> str:
-        return cls.__dict__.get("__record_name__") or f"{cls.__module__}:{cls.__qualname__}"
+        return cls.__dict__.get("__record_name__") or cls.__qualname__
 
     @classmethod
     def dirname(cls) -> str:
@@ -515,7 +529,7 @@ class Record:
     def _disk_meta(self) -> dict | None:
         mutable = type(self).mutable
         mtime = None
-        if mutable:  # edits rewrite _record.json: trust the cache only while its mtime holds
+        if mutable:  # edits rewrite _meta.json: trust the cache only while its mtime holds
             try:
                 mtime = (self._path / META).stat().st_mtime_ns
             except (FileNotFoundError, NotADirectoryError):
@@ -533,7 +547,7 @@ class Record:
 
     @property
     def meta(self) -> dict:
-        """The contents of `_record.json` (spec, status, fields, timings, provenance, error)."""
+        """The contents of `_meta.json` (spec, status, fields, timings, provenance, error)."""
         if self._writable:
             return self._meta
         meta = self._disk_meta()
@@ -820,7 +834,7 @@ class Record:
     def __tensordir_canonical__(self, *, full: bool = False) -> dict:
         """`{"__record__": type, "key": key}`; a workspace record adds the time of its last edit
         (`modified`), so records built from it get new keys after it changes. The full form, stored
-        in `_record.json`, adds the path the record is reopened from."""
+        in `_meta.json`, adds the path the record is reopened from."""
         out = {"__record__": type(self).type_id(), "key": self.key}
         if type(self).mutable:
             meta = self._disk_meta()
@@ -1013,21 +1027,8 @@ def _check_type(name: str, annotation: Any, value: Any) -> None:
 
 
 def resolve_type(type_id: str) -> type[Record]:
-    """The record class registered (or importable) under `type_id`; `Record` if unknown."""
-    if type_id in _REGISTRY:
-        return _REGISTRY[type_id]
-    module, sep, qualname = type_id.partition(":")
-    if sep:
-        try:
-            import importlib
-
-            obj: Any = importlib.import_module(module)
-            for part in qualname.split("."):
-                obj = getattr(obj, part)
-            return obj
-        except (ImportError, AttributeError):
-            pass
-    return Record
+    """The record class registered under `type_id`; `Record` if no such class is defined."""
+    return _REGISTRY.get(type_id, Record)
 
 
 def _managed_root(path: Path, key: str | None) -> Path | None:
