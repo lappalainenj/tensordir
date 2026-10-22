@@ -259,8 +259,9 @@ Tests cover six processes racing for one record (exactly one build), SIGKILL dur
 | `numpy.ndarray` | `hdf5` | `<name>.h5`, dataset `data` with dimension labels; opt-in |
 
 `record["x"]` returns a lazy handle: a `zarr.Array`, an xarray object opened without loading, or
-a `pyarrow.dataset.Dataset` for `arrow` fields. `record.x` returns the declared type: an ndarray
-for jaxtyping numpy fields. `record.load("x")` always loads. `register_codec` adds codecs, and
+a `pyarrow.dataset.Dataset` for `arrow` fields. `record.x` returns the type that was written: an
+ndarray for arrays, read into memory, and the lazy handle for the others. `record.load("x")`
+always loads. `register_codec` adds codecs, and
 later registrations are tried first.
 
 ### HDF5 output (opt-in)
@@ -283,9 +284,8 @@ default because HDF5 trades away what matters on clusters:
   datamate's `extend`. The contract matches zarr appends: rows must match the trailing shape,
   values are cast to the stored dtype, and a field written with `write` cannot be appended to.
   The file is modified in place, so a reader can see a partly appended tail.
-- **Open handles.** `record["x"]` (and `record.x` for fields not typed as numpy arrays) returns
-  an `h5py.Dataset` whose file stays open until the handle is dropped; `record.load("x")` and
-  typed numpy fields read into memory and close the file.
+- **Open handles.** `record["x"]` returns an `h5py.Dataset` whose file stays open until the
+  handle is dropped; `record.x` and `record.load("x")` read into memory and close the file.
 
 ## External tables
 
@@ -376,19 +376,19 @@ uses the codec registry:
 - `tensordir.where` applies the same conditions to `Collection`s, DataFrames (columns, with
   `spec.` implied, then index levels) and xarray objects (coordinates). It generalises flyvis's
   `.custom.where`.
-- **Accessors.** `import tensordir` imports pandas and xarray when they are installed and
-  registers a `.td` accessor on `DataFrame`, `Series`, `DataArray` and `Dataset`:
+- **Accessors.** tensordir registers a `.td` accessor on `DataFrame`, `Series`, `DataArray` and
+  `Dataset`:
   `table.td.where(...)` and `responses.td.where(...)` call `tensordir.where`;
   `series.td.where("<0.1", cell_type="T4a")` filters a Series by value and by index level;
   `table.td.diff(a, b)` and `row.td.diff(other)` diff two table rows on their `spec.` columns.
   xarray accessors have no `diff`: coordinates are not specs. If another package has already
   registered `.td`, tensordir warns and keeps the other accessor.
-- **Import time.** Registering the accessors imports pandas and xarray, which makes
-  `import tensordir` about 0.45 s slower: 0.79 s instead of 0.32 s (median of ten fresh
-  processes on a laptop; `python -X importtime` attributes 0.28 s to pandas and 0.05 s to
-  xarray). `TENSORDIR_NO_ACCESSORS=1` in the environment skips registration and both imports;
-  `table.pipe(td.where, seed=[0, 1])` and `td.where(responses, cell_type="T4a")` do the same
-  filtering without accessors.
+- **Import time.** `import tensordir` imports numpy but not pandas, xarray or zarr, which
+  together cost about 0.5 s; each is imported on first use. The accessors are registered at
+  `import tensordir` for libraries already imported, and otherwise by an import hook right after
+  pandas or xarray finishes importing. `TENSORDIR_NO_ACCESSORS=1` in the environment skips
+  registration; `table.pipe(td.where, seed=[0, 1])` and `td.where(responses, cell_type="T4a")`
+  do the same filtering without accessors.
 - `Collection.table()` gives one row per record; `varying_only=True` keeps the spec columns that
   differ. `Fit.info(depth=, include=, **filters)` is `Fit.query(status=None, **filters).table(...)`
   in one call (another project's `info`), and `record.info()` is a record's one-row table.

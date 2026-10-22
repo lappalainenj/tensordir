@@ -25,7 +25,7 @@ In code:
 
 ```python
 fit = Fit(points, n_columns=8)                        # build or reopen
-fit.centres                                           # numpy array (declared type)
+fit.centres                                           # numpy array
 fit["centres"]                                        # lazy zarr.Array
 Fit.query(seed=0).table()                             # one row per record
 Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray results
@@ -53,10 +53,10 @@ directory; `root` is a `root=` argument, else the class's `root` (`@td.root(path
 `root` extends the base root, an absolute one replaces it, as with `pathlib`'s `/`.
 `td.get_root(Fit)` shows the result; [Design](design.md#roots) has examples.
 
-**Import time.** `import tensordir` registers `.td` accessors on pandas and xarray objects and
-therefore imports both libraries, about 0.45 s. Set `TENSORDIR_NO_ACCESSORS=1` to skip that,
-and use `df.pipe(td.where, ...)` instead of `df.td.where(...)`; see
-[Collections and views](design.md#collections-and-views).
+**Import time.** `import tensordir` takes under 0.1 s: pandas, xarray and zarr are imported on
+first use. The `.td` accessors on pandas and xarray objects appear as soon as those libraries
+are imported; `TENSORDIR_NO_ACCESSORS=1` skips them, and `df.pipe(td.where, ...)` does the same
+as `df.td.where(...)`; see [Collections and views](design.md#collections-and-views).
 
 Features marked **experimental** may change or be removed; [Design](design.md#experimental-features)
 lists them.

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import traceback
 import types
@@ -392,8 +393,17 @@ class Record(Directory):
                         return self
                     if meta and meta["status"] == "failed" and not retry_failed:
                         raise BuildFailed(self, meta.get("error") or {})
-                    self._run_build(inputs, transients, previous=meta)
+                    _BUILDING[self._lock] = threading.get_ident()
+                    try:
+                        self._run_build(inputs, transients, previous=meta)
+                    finally:
+                        _BUILDING.pop(self._lock, None)
                 return self
+            if _BUILDING.get(self._lock) == threading.get_ident():
+                raise RuntimeError(
+                    f"{self!r} is being built by this thread, so this call would wait for itself; inside the "
+                    f"build, use `self`, or open the directory with td.Record.at(path)"
+                )
             if not block:
                 raise RecordBusy(self)
             if deadline is not None and time.monotonic() >= deadline:
@@ -683,8 +693,11 @@ class Record(Directory):
         if name.startswith("_") or "_path" not in self.__dict__:
             raise AttributeError(name)
         typed = type(self)._typed_fields()
-        if name in self._manifest():
-            return self._read(name, lazy=not (name in typed and _wants_numpy(typed[name])))
+        manifest = self._manifest()
+        if name in manifest:
+            # arrays read back as numpy, as written; record["name"] gives the lazy handle
+            eager = _wants_numpy(typed[name]) if name in typed else manifest[name].get("codec") in _ARRAY_CODECS
+            return self._read(name, lazy=not eager)
         if name in typed:
             raise AttributeError(f"{self!r}: field {name!r} has not been written")
         raise AttributeError(f"{type(self).__qualname__!r} has no attribute or field {name!r}")
@@ -1101,6 +1114,13 @@ def _check_type(name: str, annotation: Any, value: Any) -> None:
 def resolve_type(type_id: str) -> type[Record]:
     """The record class registered under `type_id`; `Record` if no such class is defined."""
     return _REGISTRY.get(type_id, Record)
+
+
+#: The builds running in this process, by lock path, with the thread running each.
+_BUILDING: dict[Path, int] = {}
+
+#: Codecs whose lazy handle (zarr or h5py) is not an ndarray; attribute access reads them.
+_ARRAY_CODECS = frozenset({"ndarray", "hdf5"})
 
 
 def _managed_root(path: Path, key: str | None) -> Path | None:

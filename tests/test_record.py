@@ -209,6 +209,24 @@ def test_hand_named_directories(tmp_path):
         td.Record.at(tmp_path / "nothing")
 
 
+def test_untyped_arrays_read_back_as_numpy(root):
+    class Untyped(td.Record):
+        def __init__(self, /, *, n: int = 3):
+            self.values = np.arange(n)
+
+    record = Untyped()
+    assert type(record.values) is np.ndarray and type(record["values"]).__name__ == "Array"
+
+
+def test_calling_a_record_inside_its_own_build_raises(root):
+    class Reentrant(td.Record):
+        def __init__(self, /, *, n: int = 1):
+            Reentrant(n=n)
+
+    with pytest.raises(td.BuildFailed, match="would wait for itself"):
+        Reentrant()
+
+
 def test_at_on_a_managed_path_shares_the_keyed_lease(root):
     rec = Square.locate(n=3)
     assert Square.at(Square(n=3).path, n=3)._lock == rec._lock  # one lease per directory

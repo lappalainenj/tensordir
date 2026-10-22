@@ -13,4 +13,4 @@ def test_readme_quickstart_runs(tmp_path):
     result = subprocess.run([sys.executable, str(script)], cwd=tmp_path, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stderr
     assert "done (8, 2)" in result.stdout
-    assert (tmp_path / "results" / "Fit").is_dir() and (tmp_path / "cache").is_dir()
+    assert (tmp_path / "results" / "Fit").is_dir()

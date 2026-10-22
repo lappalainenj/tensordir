@@ -40,43 +40,29 @@ uv run pytest
 ```python
 import numpy as np
 import tensordir as td
-from jaxtyping import Float
 
-td.set_root("results")  # base root; default: $TENSORDIR_ROOT, else the working directory
+td.set_root("results")  # default: $TENSORDIR_ROOT, else the working directory
 
-class Fit(td.Record):  # the type id, part of every key, is the class name
-    centres: Float[np.ndarray, "n_columns n_dims"]   # stored with dims ("column", "dim")
 
-    def __init__(
-        self,
-        points: np.ndarray,                          # an input: enters the key by its digest
-        /,
-        *,
-        n_columns: int,                              # settings: the generated Fit.Spec
-        seed: int = 0,
-        device: str = td.field("cpu", hashed=False),  # not part of the key
-        prior: float = td.field(1.0, since=2),       # added later: old keys unchanged
-    ):
+class Fit(td.Record):
+    def __init__(self, points, /, *, n_columns: int, seed: int = 0):  # inputs before /, settings after *
         rng = np.random.default_rng(seed)
-        self.centres = points[rng.choice(len(points), n_columns)]
-        self["summary"] = {"n_points": len(points)}
+        self.centres = points[rng.choice(len(points), n_columns)]  # stored as a zarr array
+
 
 points = np.random.default_rng(0).normal(size=(500, 2))
-fit = Fit(points, n_columns=8)  # builds
-fit = Fit(points, n_columns=8)  # reopens the same record; __init__ does not run
-assert Fit.lookup(points, n_columns=9) is None  # reopen only: lookup never builds
-print(fit.path.relative_to(td.get_root()), fit.status, fit.centres.shape)
-
-print(Fit.query(n_columns=8).table(depth=1, sizes=False)[["key", "status", "spec.seed"]])
-
-memory = td.memory("cache", verbose=0)  # joblib.Memory: xarray as zarr, records hashed by key
-
-@memory.cache
-def spread(fit):
-    return float(fit.centres.std())
-
-print(spread(fit))
+fit = Fit(points, n_columns=8)  # runs __init__ and stores the result
+fit = Fit(points, n_columns=8)  # reopens the stored result; __init__ does not run
+print(fit.status, fit.centres.shape)
+print(Fit.query(n_columns=8))  # every stored Fit with n_columns=8
 ```
+
+The key covers the record type, the inputs (arrays by a digest of their bytes, records by their
+key) and the settings. Settings can stay out of the key (`td.field("cpu", hashed=False)`), be
+added later without changing old keys (`td.field(1.0, since=2)`), or be specs themselves.
+jaxtyping annotations name array axes (`centres: Float[np.ndarray, "n_columns n_dims"]` is
+stored with dims `("column", "dim")`). The [example notebooks](docs/examples/index.md) cover
+each of these.
 
 ## A record on disk
 
