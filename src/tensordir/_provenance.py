@@ -65,7 +65,10 @@ def collect(cls: type) -> dict:
         source = inspect.getsourcefile(cls)
     except (TypeError, OSError):  # OSError: a class defined in a notebook or REPL (`__main__` without a file)
         source = None
+    from ._directory import active_producer
+
     return {
+        "producer": active_producer(),
         "host": socket.gethostname(),
         "pid": os.getpid(),
         "user": os.environ.get("USER") or os.environ.get("USERNAME"),

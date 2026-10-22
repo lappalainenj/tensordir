@@ -17,6 +17,7 @@ nav:
       - Accessors: examples/09_accessors.ipynb
       - External tables: examples/10_external_tables.ipynb
       - datamate directories: examples/11_legacy_datamate.ipynb
+  - Directories: directories.md
   - Migrating: migrating.md
   - Extending: extending.md
   - Design: design.md

@@ -20,6 +20,8 @@ import numpy as np
 
 from . import _provenance
 from ._canonical import canonical, sha256, untag
+from ._directory import Directory
+from ._files import read_file, write_file
 from ._lease import Lease, lease_state
 from ._root import get_root
 from .codecs import atomic_path, codec_for, get_codec, remove_tree
@@ -91,14 +93,7 @@ class _ClassOrInstance:
         return types.MethodType(self._on_instance, obj)
 
 
-class _RecordType(type):
-    """Calling a record type gets the record: `Fit(points, n_columns=8)` is `Fit.get(...)`."""
-
-    def __call__(cls, *args: Any, **kwargs: Any) -> Any:
-        return cls.get(*args, **kwargs)
-
-
-class Record(metaclass=_RecordType):
+class Record(Directory):
     """A directory `<root>/<RecordName>/<key[:16]>/` holding `_meta.json` and the record's data.
 
     `__init__` is the build. Its positional-only parameters are the inputs, its keyword-only
@@ -145,6 +140,8 @@ class Record(metaclass=_RecordType):
     #: would be chosen: `{"ndarray": "hdf5"}` stores arrays, including `append`ed ones, as HDF5
     #: files instead of zarr (see `tensordir.codecs.Hdf5Codec` for the trade-offs).
     codecs: ClassVar[Mapping[str, str]] = {}
+
+    _is_record: ClassVar[bool] = True
 
     #: The settings as a frozen dataclass, generated from the keyword-only `__init__` parameters.
     Spec: ClassVar[type[_Spec]]
@@ -211,6 +208,16 @@ class Record(metaclass=_RecordType):
         return cls.__dict__[cache]
 
     @classmethod
+    def _construct(cls, *inputs: Any, **settings: Any) -> Self:
+        """Calling a record type gets the record: `Fit(points, n_columns=8)` is `Fit.get(...)`."""
+        return cls.get(*inputs, **settings)
+
+    @classmethod
+    def open(cls, path: str | os.PathLike = ".") -> Self:
+        """The record at `path`: `Record.at(path)`."""
+        return Record.at(path) if cls is Record else cls.at(path)
+
+    @classmethod
     def compute_key(cls, *inputs: Any, **settings: Any) -> str:
         """The full sha256 key for these inputs and settings (no filesystem access)."""
         inputs, spec, _ = cls._interface.bind(inputs, settings)
@@ -240,6 +247,7 @@ class Record(metaclass=_RecordType):
         state = {
             "_path": path, "_dir": path, "_key": key, "_spec": spec, "_lock": lock, "_tmp": tmp,
             "_writable": False, "_meta": None, "_done_meta": None, "_done_mtime": None,
+            "_parent": None, "_meta_cache": None, "_root": managed_root,
         }
         self.__dict__.update(state)
         return self
@@ -422,7 +430,7 @@ class Record(metaclass=_RecordType):
             "spec_type": f"{type(self.spec).__module__}:{type(self.spec).__qualname__}",
             "spec": self.spec.to_dict(),
             "inputs": cls._identify(inputs),
-            "upstream": {r.key: str(r.path) for v in (self.spec, list(inputs)) for r in _records_in(v)},
+            "upstream": {r.key: self._relative(r.path) for v in (self.spec, list(inputs)) for r in _records_in(v)},
             "status": "running",
             "fields": fields,
             "created": (previous or {}).get("created") or _now(),
@@ -476,6 +484,13 @@ class Record(metaclass=_RecordType):
         if not cls.in_place:
             self._place(workdir)
         self.__dict__.update(_dir=self._path, _meta=None)
+
+    def _relative(self, path: Path) -> str:
+        """`path` relative to this record's root when it lies inside it, else absolute; stored
+        relative paths keep a copied or moved root linked."""
+        if self._root is not None and Path(path).is_relative_to(self._root):
+            return Path(path).relative_to(self._root).as_posix()
+        return str(path)
 
     def _place(self, src: Path) -> None:
         final = self._path
@@ -583,7 +598,7 @@ class Record(metaclass=_RecordType):
         status is `absent`.
         """
         meta = self.meta
-        return tuple(_revive_tags(value, meta.get("upstream", {})) for value in meta["inputs"])
+        return tuple(_revive_tags(value, meta.get("upstream", {}), self._root) for value in meta["inputs"])
 
     def lineage(self) -> list["Record"]:
         """Every record this one was built from, as an input or a spec field, directly or through
@@ -598,7 +613,7 @@ class Record(metaclass=_RecordType):
             meta = record._disk_meta()
             if meta is None:
                 return
-            for upstream in _upstream_of(meta):
+            for upstream in _upstream_of(meta, record._root):
                 if upstream.key not in seen:
                     seen.add(upstream.key)
                     visit(upstream)
@@ -639,8 +654,28 @@ class Record(metaclass=_RecordType):
         return self._read(name, lazy=True)
 
     def load(self, name: str) -> Any:
-        """The field's value fully in memory (`numpy.ndarray` for arrays)."""
-        return self._read(name, lazy=False)
+        """Field `name` fully in memory (`numpy.ndarray` for arrays); any other file in the
+        record directory by its suffix, as `Directory.load` reads it."""
+        if name in self._manifest() or not (self._dir / name).exists():
+            return self._read(name, lazy=False)
+        return read_file(self._dir / name)
+
+    def save(self, name: str, value: Any) -> Path:
+        """Write `value` as the file `name` by its suffix (not a field): inside the build, or on a
+        workspace record."""
+        if not self._writable and not type(self).mutable:
+            raise ReadOnlyError(f"{self!r} is read-only: save files inside __init__, or set `mutable = True`")
+        path = self._dir / name
+        write_file(path, value)
+        return path
+
+    def move(self, id: str) -> Self:
+        """Records live where their key puts them; copy a record to another root instead."""
+        raise TypeError(f"{type(self).__qualname__} is content-addressed and cannot be moved")
+
+    def archive(self) -> Self:
+        """Records live where their key puts them; delete it or keep it instead."""
+        raise TypeError(f"{type(self).__qualname__} is content-addressed and cannot be archived")
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_") or "_path" not in self.__dict__:
@@ -1005,26 +1040,27 @@ def _tags_in(value: Any) -> Iterator[dict]:
             yield from _tags_in(item)
 
 
-def _revive_tags(value: Any, paths: Mapping[str, str]) -> Any:
+def _revive_tags(value: Any, paths: Mapping[str, str], base: Path | None = None) -> Any:
     if isinstance(value, dict):
         if "__record__" in value:
-            return _open_upstream(value, paths)
+            return _open_upstream(value, paths, base=base)
         if set(value) <= {"__float__", "__digest__"}:
             return untag(value)
-        return {k: _revive_tags(v, paths) for k, v in value.items()}
+        return {k: _revive_tags(v, paths, base) for k, v in value.items()}
     if isinstance(value, list):
-        return [_revive_tags(v, paths) for v in value]
+        return [_revive_tags(v, paths, base) for v in value]
     return value
 
 
-def _upstream_of(meta: dict) -> list[Record]:
+def _upstream_of(meta: dict, base: Path | None = None) -> list[Record]:
     """The records named in a record's stored spec and inputs."""
     paths = meta.get("upstream", {})
-    return [_open_upstream(tag, paths) for part in (meta.get("spec"), meta.get("inputs")) for tag in _tags_in(part)]
+    return [_open_upstream(tag, paths, base=base) for part in (meta.get("spec"), meta.get("inputs")) for tag in _tags_in(part)]
 
 
-def _open_upstream(tag: Mapping, paths: Mapping[str, str], cls: type[Record] | None = None) -> Record:
-    """The record a tag names: at its stored path, else under its type's current root."""
+def _open_upstream(tag: Mapping, paths: Mapping[str, str], cls: type[Record] | None = None, base: Path | None = None) -> Record:
+    """The record a tag names: at its stored path (relative paths joined onto `base`, the root of
+    the record that names it), else under its type's current root."""
     type_id, key = tag["__record__"], tag["key"]
     klass = resolve_type(type_id)
     if cls is not None and not issubclass(klass, cls):
@@ -1032,7 +1068,12 @@ def _open_upstream(tag: Mapping, paths: Mapping[str, str], cls: type[Record] | N
             raise TypeError(f"{type_id} {key[:16]} is a {klass.__qualname__}, not a {cls.__qualname__}")
         klass = cls
     stored = tag.get("path") or paths.get(key)
-    candidates = [Path(stored)] if stored else []
+    candidates = []
+    if stored:
+        path = Path(stored)
+        if not path.is_absolute() and base is not None:
+            path = base / path
+        candidates.append(path)
     if klass is not Record:
         candidates.append(klass.resolve_root() / klass.dirname() / key[:16])
     if not candidates:

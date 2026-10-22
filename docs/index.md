@@ -35,6 +35,8 @@ Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray r
 |---|---|
 | Declare what identifies a result | `__init__` inputs (before `/`) and settings (after `*`), `field(hashed=False)`, `field(since=...)`, `transient`, `Digest` |
 | Build or reopen | `Fit(...)`, `Record.get`, `lookup`, `locate`, `at` |
+| Organize work in named folders | `Directory` subclasses with metadata fields and child types; `resolve`, `new`, `move`, `archive`, `active` |
+| Read and write any file by suffix | `load`, `save`, `register_suffix`, `Image`, `Video` |
 | Store values | `self.x = ...`, `self["x"] = ...`, `write(codec=...)`, `append` |
 | Name array axes | jaxtyping field annotations, `Dims`, `register_dims` |
 | Work with many records | `Record.query`, `Record.info`, `Collection.where`, `Collection.table`, `Collection.map`, `reindex` |

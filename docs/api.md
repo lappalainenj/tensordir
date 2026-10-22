@@ -18,6 +18,12 @@
 
 ::: tensordir.SnapshotChanged
 
+::: tensordir.Directory
+
+::: tensordir.Level
+
+::: tensordir.NodeId
+
 ::: tensordir.Record
 
 ::: tensordir.transient
@@ -69,6 +75,12 @@
 ::: tensordir.dims_for
 
 ::: tensordir.register_dims
+
+::: tensordir.register_suffix
+
+::: tensordir.Image
+
+::: tensordir.Video
 
 ::: tensordir.Codec
 

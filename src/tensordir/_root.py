@@ -60,15 +60,16 @@ def _base() -> Path:
 
 
 def _record_class(cls: type) -> type:
-    from ._record import Record
+    from ._directory import Directory
 
-    if not (isinstance(cls, type) and issubclass(cls, Record)):
-        raise TypeError(f"expected a Record subclass, got {cls!r}")
+    if not (isinstance(cls, type) and issubclass(cls, Directory)):
+        raise TypeError(f"expected a Record or Directory subclass, got {cls!r}")
     return cls
 
 
 def get_root(cls: type | None = None, /, *, root: str | os.PathLike | None = None) -> Path:
-    """The directory holding records of `cls`, a `Record` subclass.
+    """The directory holding records of `cls`, a `Record` subclass (or the base of relative
+    paths for a `Directory` subclass).
 
     The result is `base / path`: `base` is the innermost `use_root`, else `set_root`, else
     `$TENSORDIR_ROOT`, else the current working directory; `path` is `root` if given, else
@@ -88,7 +89,8 @@ def get_root(cls: type | None = None, /, *, root: str | os.PathLike | None = Non
 
 
 def root(path: str | os.PathLike | None) -> Callable[[type], type]:
-    """Class decorator: store records of the decorated `Record` subclass (and its subclasses)
+    """Class decorator: store records of the decorated `Record` subclass (and its subclasses),
+    or resolve relative paths of a `Directory` subclass,
     under `path`, joined onto the base root. `None` removes an inherited root.
 
     ```python
@@ -111,7 +113,7 @@ def root(path: str | os.PathLike | None) -> Callable[[type], type]:
         try:
             target = _record_class(cls)
         except TypeError:
-            raise TypeError(f"@root decorates Record subclasses, not {cls!r}") from None
+            raise TypeError(f"@root decorates Record and Directory subclasses, not {cls!r}") from None
         target.root = path
         return cls
 

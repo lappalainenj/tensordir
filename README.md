@@ -94,6 +94,11 @@ Status is `absent`, `running`, `done`, `failed` (traceback stored; rebuild with
 `retry_failed=True`) or `stale` (the builder stopped heartbeating). Concurrent `get` calls on any
 number of processes build once: the first takes an `mkdir` lease, the others wait.
 
+Results are records, addressed by key in one shared root. The work that produces them can be
+organized in named folders with `td.Directory`: typed metadata in a git-tracked `_meta.yaml`,
+child types declared by nesting classes, and any file read or written by its suffix; see
+[directories](docs/directories.md).
+
 Read on: [example notebooks](docs/examples/index.md) for every use case,
 [migrating from datamate, flyvis and another project](docs/migrating.md), [extending](docs/extending.md) and
 [design](docs/design.md).

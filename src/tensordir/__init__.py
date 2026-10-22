@@ -2,6 +2,8 @@
 
 from ._canonical import Digest
 from ._diff import SpecDiff, diff
+from ._directory import Directory, Level, NodeId
+from ._files import Image, Video, register_suffix
 from ._root import get_root, root, set_root, use_root
 from ._where import any_of, exactly, where
 from .codecs import Codec, register_codec
@@ -60,9 +62,13 @@ __all__ = [
     "Collection",
     "DeltaRef",
     "Digest",
+    "Directory",
     "Dims",
     "DimsError",
+    "Image",
     "KeyCollision",
+    "Level",
+    "NodeId",
     "ParquetRef",
     "ReadOnlyError",
     "Record",
@@ -75,6 +81,7 @@ __all__ = [
     "Stages",
     "StoreBackend",
     "TensordirError",
+    "Video",
     "View",
     "any_of",
     "cached_method",
@@ -88,6 +95,7 @@ __all__ = [
     "needs_compute",
     "register_codec",
     "register_dims",
+    "register_suffix",
     "reindex",
     "root",
     "set_root",

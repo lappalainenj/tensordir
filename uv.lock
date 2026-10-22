@@ -2449,6 +2449,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
+    { name = "pyyaml" },
     { name = "zarr" },
 ]
 
@@ -2530,6 +2531,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'tables'", specifier = ">=2.1" },
     { name = "pyarrow", marker = "extra == 'delta'", specifier = ">=15" },
     { name = "pyarrow", marker = "extra == 'tables'", specifier = ">=15" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "pyyaml", marker = "extra == 'legacy'", specifier = ">=6" },
     { name = "safetensors", marker = "extra == 'torch'", specifier = ">=0.4" },
     { name = "tensordir", extras = ["xarray", "memory", "tables", "typing", "legacy", "torch", "delta", "hdf5"], marker = "extra == 'all'" },

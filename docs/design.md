@@ -187,6 +187,31 @@ their keys.
 - A subclass without its own `__init__` inherits the interface; one with its own `__init__` has
   its own.
 
+## Directories
+
+`Record` subclasses `Directory`. A directory is addressed by its path; a record by its key.
+
+- **Opening** (`Cls(path)`, `Cls.open(path)`) reads `_meta.yaml` if there is one and writes
+  nothing. A relative path is joined onto the type's root, as for records. `td.Directory.open`
+  returns a typed directory as its registered class; a typed class refuses a folder of another
+  type.
+- **`_meta.yaml`** holds `type`, the metadata fields in declaration order and `aliases`. It has
+  no timestamps, hosts or build state, so tracking it in git shows only edits. Edits take a lease
+  on `.<name>.lock` next to the folder and replace the file atomically.
+- **Child types** are nested `Directory` classes; children are subfolders whose `_meta.yaml`
+  names the child type. A level spans one parent (`study.version`) or, reached through another
+  level, all their children (`dev.track.study.version`).
+- **IDs** are paths of child names from the directory navigation started at (`origin`), without
+  `archive` folders. `resolve(id)` walks child names, then looks for the one directory listing
+  `id` among its aliases (as given, or prefixed with the ID of the directory `resolve` is called
+  on).
+- **New names** come from the child type's `names` pattern: the highest number used by a child,
+  an archived child, or an alias whose parent part is this directory's ID, plus one.
+- **Metadata validation** covers `str`, `int`, `float`, `bool`, `Literal`, unions, lists and
+  `td.NodeId` (must resolve from the origin); other annotations are not checked.
+- **Producers.** `with directory.active():` sets a context variable and `$TENSORDIR_PRODUCER`;
+  records built meanwhile store `{"id", "path"}` as `provenance["producer"]`.
+
 ## Stages
 
 `td.Stages(name=td.Stage(after=..., repeat=..., required=...))` declares the steps of a build;

@@ -87,7 +87,7 @@ def test_inputs_reopen_records_and_keep_other_values(chain):
     assert inputs[3] == [extra]
     assert inputs[2] == td.Digest.of(np.ones(5))
     np.testing.assert_array_equal(inputs[0].y, scaled.y)
-    assert summed.meta["upstream"][scaled.key] == str(scaled.path)
+    assert summed.meta["upstream"][scaled.key] == f"ComposeScaled/{scaled.key[:16]}"  # relative to the root
 
 
 def test_lineage_walks_the_dag_upstream_first(chain):
@@ -111,10 +111,9 @@ def test_inputs_survive_a_moved_root(root, chain, tmp_path):
     moved = tmp_path / "moved"
     shutil.copytree(root, moved)
     shutil.rmtree(root)
-    with td.use_root(moved):
-        inputs = td.Record.at(moved / "ComposeSummed" / summed.key[:16]).inputs
-        assert inputs[0].path == moved / "ComposeScaled" / scaled.key[:16]
-        assert inputs[0].status == "done"
+    inputs = td.Record.at(moved / "ComposeSummed" / summed.key[:16]).inputs  # no use_root needed
+    assert inputs[0].path == moved / "ComposeScaled" / scaled.key[:16]
+    assert inputs[0].status == "done"
 
 
 def test_deleted_input_reopens_as_absent(chain):
