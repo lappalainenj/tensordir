@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
-import zarr
 
 from .errors import DimsError
 
@@ -48,7 +47,9 @@ def atomic_path(path: Path) -> Iterator[Path]:
             tmp.unlink()
 
 
-def _group(directory: Path, mode: str = "a") -> zarr.Group:
+def _group(directory: Path, mode: str = "a") -> "zarr.Group":
+    import zarr  # imported on first use: it costs 0.2 s at import tensordir
+
     return zarr.open_group(directory / STORE, mode=mode, zarr_format=3)
 
 

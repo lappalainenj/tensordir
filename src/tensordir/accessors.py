@@ -7,18 +7,18 @@ losses.td.where("<0.1")                         # pandas.Series: values (and ind
 table.td.diff(0, 1)                             # what differs between two rows' spec columns
 ```
 
-Importing tensordir imports pandas and xarray if they are installed and registers the accessors
-on `DataFrame`, `Series`, `DataArray` and `Dataset`. If another package registered `.td` first,
-tensordir warns and leaves it in place; `tensordir.where` works either way.
-
-Import time: those imports make `import tensordir` take about 0.45 s longer (measured on a
-laptop: 0.79 s with, 0.32 s without). Set the environment variable `TENSORDIR_NO_ACCESSORS=1`
-before importing tensordir to skip registration and both imports; then call the function
-instead, e.g. `table.pipe(td.where, seed=[0, 1])` or `td.where(responses, cell_type="T4a")`.
+The accessors on `DataFrame`, `Series`, `DataArray` and `Dataset` are registered when tensordir
+is imported, for pandas and xarray already imported, and otherwise as soon as each one is
+imported; `import tensordir` imports neither. If another package registered `.td` first,
+tensordir warns and leaves it in place; `tensordir.where` works either way. Set the environment
+variable `TENSORDIR_NO_ACCESSORS=1` before importing tensordir to skip registration; then call
+the function instead, e.g. `table.pipe(td.where, seed=[0, 1])`.
 """
 
+import importlib.abc
 import importlib.util
 import os
+import sys
 import warnings
 from collections.abc import Mapping
 from typing import Any
@@ -110,16 +110,58 @@ def _register(cls: type, register: Any, accessor: type) -> bool:
 
 
 def register() -> None:
-    """Register the `.td` accessors on the installed libraries (idempotent)."""
+    """Register the `.td` accessors on pandas and xarray (idempotent): now for a library already
+    imported, else right after it is imported, so `import tensordir` imports neither."""
     if os.environ.get("TENSORDIR_NO_ACCESSORS"):
         return
-    if importlib.util.find_spec("pandas") is not None:
+    pending = []
+    for library in _LIBRARIES:
+        if library in sys.modules:
+            _register_library(library)
+        elif importlib.util.find_spec(library) is not None:
+            pending.append(library)
+    if pending and not any(isinstance(f, _RegisterOnImport) for f in sys.meta_path):
+        sys.meta_path.insert(0, _RegisterOnImport(pending))
+
+
+def _register_library(library: str) -> None:
+    """Register the accessors of `library` ("pandas" or "xarray")."""
+    if library == "pandas":
         import pandas as pd
 
         _register(pd.DataFrame, pd.api.extensions.register_dataframe_accessor, FrameAccessor)
         _register(pd.Series, pd.api.extensions.register_series_accessor, SeriesAccessor)
-    if importlib.util.find_spec("xarray") is not None:
+    else:
         import xarray as xr
 
         _register(xr.DataArray, xr.register_dataarray_accessor, XarrayAccessor)
         _register(xr.Dataset, xr.register_dataset_accessor, XarrayAccessor)
+
+
+_LIBRARIES = ("pandas", "xarray")
+
+
+class _RegisterOnImport(importlib.abc.MetaPathFinder):
+    """Registers a library's accessors as soon as the library finishes importing."""
+
+    def __init__(self, libraries: list[str]):
+        self.libraries = set(libraries)
+
+    def find_spec(self, fullname: str, path: Any = None, target: Any = None) -> Any:
+        """Find `fullname` with the other finders; wrap its loader if it is a pending library."""
+        if fullname not in self.libraries:
+            return None
+        self.libraries.discard(fullname)  # the find_spec below must not find this finder again
+        if not self.libraries:
+            sys.meta_path.remove(self)
+        spec = importlib.util.find_spec(fullname)
+        if spec is None or spec.loader is None:
+            return spec
+        exec_module = spec.loader.exec_module
+
+        def exec_and_register(module: Any) -> None:
+            exec_module(module)
+            _register_library(fullname)
+
+        spec.loader.exec_module = exec_and_register
+        return spec
