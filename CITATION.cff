@@ -10,7 +10,6 @@ version: 0.1.0
 authors:
   - family-names: Lappalainen
     given-names: Janne K.
-    # orcid: TODO (add "https://orcid.org/XXXX-XXXX-XXXX-XXXX")
 keywords:
   - zarr
   - xarray

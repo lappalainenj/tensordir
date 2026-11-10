@@ -1,8 +1,7 @@
 """`Collection`: an ordered set of records with a table view and an xarray `map`.
 
-`table()` generalises the `info()` helper of another project (MIT, Copyright (c) 2024 mackelab): one row
-per record with status, timestamps, size and the flattened spec, columns ordered by nesting depth
-and filtered by depth or regex. `map()` generalises flyvis's `generic_responses` (MIT, Copyright
+`table()` generalises an earlier `info()` helper: one row per record with status, timestamps,
+size and the flattened spec, columns ordered by nesting depth and filtered by depth or regex. `map()` generalises flyvis's `generic_responses` (MIT, Copyright
 (c) 2023 Janne K. Lappalainen et al.): one labeled result per record, concatenated along a new
 dimension with spec fields as coordinates.
 """

@@ -360,7 +360,7 @@ class Record(Directory):
         return Collection([self]).table(depth=depth, include=include, sizes=sizes)
 
     info = _ClassOrInstance(_info_of_type, _info_of_record)
-    """A table of records (another project's `info(Type, depth, include)`), needs pandas.
+    """A table of records, needs pandas.
 
     On the class, `Fit.info(depth=..., include=..., **filters)` is
     `Fit.query(root=root, status=status, **filters).table(depth=..., include=..., sizes=...,

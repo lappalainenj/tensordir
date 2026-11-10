@@ -290,8 +290,8 @@ default because HDF5 trades away what matters on clusters:
 
 ## External tables
 
-Some inputs live outside any root and are too large to copy: another project reads CAVE synapse
-exports, Delta Lake tables on GCS, through `deltalake` and duckdb. `td.DeltaRef` and
+Some inputs live outside any root and are too large to copy, such as a Delta Lake table in a cloud
+bucket read through `deltalake` and duckdb. `td.DeltaRef` and
 `td.ParquetRef` name one snapshot of such a table so that records can depend on it:
 
 | | `DeltaRef(uri, version=None, storage_options=None)` | `ParquetRef(uri, version=None)` |
@@ -359,7 +359,7 @@ uses the codec registry:
   codec is not faithful for it (`Codec.faithful`): torch modules under the built-in safetensors
   codec, arrow tables.
 - `output.zarr` and `output.parquet` from earlier tensordir versions, and `output.h5` from the
-  flyvis and another project netCDF backends, are still read; recomputing replaces them.
+  flyvis netCDF backends, are still read; recomputing replaces them.
 - Subclasses override `select_codec(item)` or `skip_codecs` and are passed as
   `td.memory(location, backend=Subclass)`, which registers them with joblib.
 - Records pickle as `(type id, key, path)`, so joblib hashes a record's identity, not its data.
@@ -392,7 +392,7 @@ uses the codec registry:
   do the same filtering without accessors.
 - `Collection.table()` gives one row per record; `varying_only=True` keeps the spec columns that
   differ. `Fit.info(depth=, include=, **filters)` is `Fit.query(status=None, **filters).table(...)`
-  in one call (another project's `info`), and `record.info()` is a record's one-row table.
+  in one call, and `record.info()` is a record's one-row table.
   `tensordir.diff` compares two specs, records or dicts by dotted name.
 - `Collection.map(fn, dim=, coords=)` concatenates per-record xarray results, optionally
   memoized.
@@ -448,7 +448,7 @@ workload shows whether it is needed; until then its behaviour may change and it 
 | `Record.inputs`, `Record.lineage` | [Composing records](extending.md#composing-records) |
 
 `DeltaRef`, workspace records, `in_place` builds and the `.td` accessors are not experimental:
-each replaces something datamate, flyvis or another project already did.
+each replaces something datamate or flyvis already did.
 
 ## Known limitations
 

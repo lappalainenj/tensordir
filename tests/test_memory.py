@@ -213,7 +213,7 @@ def test_recompute_replaces_output(cache):
 
 
 def test_legacy_h5_outputs_are_read(cache):
-    """A cache slot written by the flyvis / another project netCDF backend loads as before."""
+    """A cache slot written by a flyvis netCDF backend loads as before."""
 
     @cache.cache
     def f(n):

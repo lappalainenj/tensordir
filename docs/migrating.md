@@ -1,9 +1,10 @@
-# Migrating from datamate, flyvis and another project
+# Migrating from datamate and flyvis
 
 ## Names
 
 datamate had one class, `Directory`, that was at once a configuration, a build recipe, a
-mutable folder and a reader. tensordir splits those roles:
+mutable folder and a reader. tensordir splits those roles between records, addressed by key,
+and directories, addressed by the name you give them ([Directories](directories.md)):
 
 | datamate | tensordir | role |
 |---|---|---|
@@ -11,6 +12,7 @@ mutable folder and a reader. tensordir splits those roles:
 | a class holding `self.dir = Directory(config)` and writing to it (flyvis `Solver`) | a `mutable = True` record, used directly or held as `self.record` | an object that fills a record over time |
 | `config` (`Namespace`), `_meta.yaml` | the generated `Spec` (frozen dataclass), `_meta.json` | what identifies a result |
 | `Directory(config)` / `Directory(path, config)` | `Fit(*inputs, **settings)` / `Fit.at(path, *inputs, **settings)` | build or reopen |
+| `Directory(path)` as a hand-organized folder, nested `Directory` classes | `td.Directory(path)`, a `td.Directory` subclass with typed `_meta.yaml` fields and nested child types | organize work by name |
 | list of directories, `info(Type)` | `Collection` from `Record.query(...)`, `Record.info(...)` | many results |
 | `NetworkView`, `CheckpointedNetwork` (flyvis) | `View` | derived objects and caches |
 | `Namespace.diff` | `tensordir.diff`, `Spec.diff` | compare configurations |
@@ -22,7 +24,7 @@ spec or inputs.
 
 ## Use-case map
 
-| Task | datamate / flyvis / another project / joblib | tensordir |
+| Task | datamate / flyvis / joblib | tensordir |
 |---|---|---|
 | **Configure & build** | `class Fit(Directory): def __init__(self, n=8, seed=0)` | `class Fit(td.Record): def __init__(self, /, *, n=8, seed=0)` |
 | | `Fit(n=8)`, `Fit({"n": 8})`, `Fit(Namespace(n=8))` | `Fit(n=8)`, `Fit(**spec)` |
@@ -33,14 +35,15 @@ spec or inputs.
 | | `@root(path)` class decorator | `@td.root(path)` or the class attribute `root = path`; a relative path is joined onto the base root ([rule](design.md#roots)) |
 | | `set_root_dir`, `set_root_context` | `td.set_root`, `with td.use_root(path)`, `root=` argument |
 | | building from another directory's contents | inputs: `Cluster(points_record, weights_array, n_clusters=3)` |
-| | reading a Delta export (another project `export.to_table()`), caching by release version | a `td.DeltaRef(uri, version=...)` spec field; `ref.to_table(columns=, filter=)`, `ref.duckdb()`, `ref.materialize(self, name)` |
-| **Open & read** | `Directory(path)` | `td.Record.at(path)` (returns the registered class) |
+| | reading a Delta Lake export, caching by table version | a `td.DeltaRef(uri, version=...)` spec field; `ref.to_table(columns=, filter=)`, `ref.duckdb()`, `ref.materialize(self, name)` |
+| **Open & read** | `Directory(path)` | `td.Record.at(path)` for a record (returns the registered class), `td.Directory(path)` for any folder |
 | | `dir.config.x`, `dir.config.to_dict()` | `record.spec.x`, `record.spec.to_dict()`, `record.spec.flat()` |
 | | `dir.meta`, `dir.status` | `record.meta`, `record.status`, `record.error` |
 | | `dir.x[:]`, `dir.x[()]`, `dir["x"]` (HDF5 `ArrayFile`) | `record.x` (lazy zarr; numpy for typed fields), `record["x"][:]`, `record.load("x")` |
 | | `"x" in dir`, `dir.keys()`, `dir.tree()`, `repr(dir)` | `"x" in record`, `record.keys()`, `record.tree()`; IPython shows the tree for a record that ends a cell, Jupyter an HTML table, `repr` one line |
 | | sub-directories (`connectome.nodes.type[:]`) | one DataFrame (`parquet`) or `xarray.Dataset`/`DataTree` field |
 | | `nodes.to_df()`, `Directory.from_df(df)` | `self["nodes"] = df` in `__init__`; `record.nodes` is the DataFrame |
+| | reading any file by suffix | `directory.load("figure.png")`, `directory.save(name, value)`, `td.register_suffix` |
 | **Labeled arrays** | shapes in docstrings, `xarray` built by hand | jaxtyping annotations store dims; `record.to_xarray("x")`, `xr.open_zarr(record.path / "data.zarr")` |
 | **Append logs** | `dir.extend("loss", [value])` | `self.append("loss", [value])` in `__init__` (zarr; HDF5 under `codecs = {"ndarray": "hdf5"}`); `in_place = True` to let readers watch |
 | | `self.dir.loss = losses`, `self.dir.extend(...)` from a `Solver` | `self.record.loss = losses`, `self.record.append(...)` on a workspace record |
@@ -49,9 +52,9 @@ spec or inputs.
 | **Query many runs** | `collect_all_of_type(T)`, `dir_walk`, `EnsembleDir` children | `T.query(status=None)` |
 | | filtering a list of directories by config | `T.query(model__lr=0.1, seed=[0, 1])`, `collection.where(...)` |
 | | `generic_responses` over an ensemble (flyvis) | `collection.map(fn, dim="network", coords=["seed"], memory=...)` |
-| **Tables & where** | `info(T, depth=1, include=[...])` (another project) | `T.info(depth=1, include=[...])`; `record.info()` for one record |
+| **Tables & where** | a hand-written table of run configs and statuses | `T.info(depth=1, include=[...])`; `record.info()` for one record |
 | | `namespaces_to_df(configs)` | `collection.table()` (`spec.<dotted name>` columns) |
-| | `df.query("model_config.optimizer == 'x'")` | `table.td.where(model_config__optimizer="x")` or `td.where(table, ...)` |
+| | `df.query("model.optimizer == 'x'")` | `table.td.where(model__optimizer="x")` or `td.where(table, ...)` |
 | | `where_dataframe(df, type="T4a", u=2)` | `df.td.where(type="T4a", u=2)` (rows; `.index` for the index) |
 | | `responses.custom.where(cell_type=["T4a", "T4b"], time=">0,<1")` | `responses.td.where(cell_type=["T4a", "T4b"], time=">0,<1")` |
 | **Diff specs** | `config0.diff(config1, name1=, name2=)` | `td.diff(a, b)`, `a.spec.diff(b.spec)`, `hashed=True` for key-relevant fields |
@@ -63,8 +66,8 @@ spec or inputs.
 | | `CheckpointedNetwork.__reduce__` for identity hashing | records and views pickle as `(type, key, path)` |
 | | `FIFOCache` / `lru_cache` on view methods | `@td.cached_method(maxsize=...)` |
 | **Status & concurrency** | `running` / `done` / `stopped`, killed jobs stay `running` | `absent`, `running`, `done`, `failed` (traceback stored), `stale` (lease expired) |
-| | `_override_status(str(e))`, `set_run_failed` (another project) | automatic: an exception in `__init__` stores a `failed` record |
-| | `locked_meta` with `fcntl` (another project), SWMR HDF5 | `mkdir` leases with heartbeats; atomic rename of finished builds |
+| | setting a failed status by hand in an `except` block | automatic: an exception in `__init__` stores a `failed` record |
+| | `fcntl` locks on metadata files, SWMR HDF5 | `mkdir` leases with heartbeats; atomic rename of finished builds |
 | | rerun a failure | `Fit.get(**spec, retry_failed=True)` |
 | | job status of an ensemble (flyvis `ensemble.status()`) | `collection.status_counts()`, `tensordir status` |
 | **Delete & clean** | `dir.rmtree("y")`, `delete_if_exists=True` | `record.delete()`, then `get` rebuilds |
@@ -125,7 +128,7 @@ class Train(td.Record):
 ### Objects that hold a directory
 
 ```python
-# datamate (flyvis Solver, another project meta runs)
+# datamate (flyvis Solver)
 class Solver:
     def __init__(self, name, config):
         self.dir = NetworkDir(name, config)
@@ -160,18 +163,18 @@ To keep a class that is not a record, hold one: `self.record = Network(**spec)`,
 ### Query, tables and where
 
 ```python
-# another project
-runs = info(FitDir, depth=1, include=["model_type"])
-runs = runs.query("model_config.optimizer == 'adam'")
+# datamate
+runs = namespaces_to_df([d.config for d in collect_all_of_type(FitDir)])
+runs = runs.query("model.optimizer == 'adam'")
 ```
 
 ```python
 # tensordir
-runs = Fit.query(model_config__optimizer="adam")      # filter on disk
-table = Fit.info(depth=1, include=["model_type"])                  # all statuses, as a DataFrame
-table.td.where(status="done", model_config__lr=">1e-4, <1e-2")        # filter a table
-table.groupby("spec.model_type")["duration_s"].mean()                  # flat columns group
-Fit.query().table(varying_only=True)                              # only what differs
+runs = Fit.query(model__optimizer="adam")                      # filter on disk
+table = Fit.info(depth=1, include=["model"])                   # all statuses, as a DataFrame
+table.td.where(status="done", model__lr=">1e-4, <1e-2")        # filter a table
+table.groupby("spec.model.optimizer")["duration_s"].mean()     # flat columns group
+Fit.query().table(varying_only=True)                           # only what differs
 ```
 
 Conditions are the same for `Record.query`, `Collection.where` and `tensordir.where`: a value
@@ -233,12 +236,12 @@ A complete version, with checkpoints and an ensemble `map`, is in
 ### Status, reruns and cleanup
 
 ```python
-# another project
+# before: status kept by hand
 try:
-    train(model_dir)
+    train(run_dir)
 except Exception as e:
-    model_dir._override_status(str(e))
-rm_all_of_type(FitDir, y_n="y")
+    mark_failed(run_dir, str(e))       # killed jobs stay "running"
+rm_all_of_type(RunDir)
 ```
 
 ```python
@@ -257,8 +260,8 @@ Train.query(status="failed").delete()    # or Train.get(**spec, retry_failed=Tru
 |---|---|---|
 | Mutating any directory after it is built (`_modified_past_init`) | a result must match its key; edits would silently invalidate it | opt in per record type with `mutable = True`; `in_place = True` for progressive writes during a build |
 | Directory search by config (`_meta.yaml` scan, `Directory(config)` lookup) | slow on large roots and ambiguous | content-addressed keys; `Record.query` and the index for search |
-| `move` | the path is a function of the key | `Record.at` for hand-named directories |
-| Nested `Directory` trees | one record per result keeps keys and status simple | DataFrame, `xarray.Dataset`/`DataTree` fields, or separate records linked as inputs |
+| `move` for records | a record's path is a function of its key | `td.Directory.move(id)` for named folders (the old ID stays as an alias); `Record.at` for hand-named records |
+| Nested records | one record per result keeps keys and status simple | DataFrame, `xarray.Dataset`/`DataTree` fields, or separate records linked as inputs; nested `td.Directory` types organize folders |
 | `Namespace` (mutable attribute dict), `namespacify`, `without`, `walk`, `is_subset` | specs are frozen, typed dataclasses | `Spec`, `spec.replace(...)`, `spec.flat()`, `td.diff` |
 | SWMR HDF5, HDF5 by default | locking problems on shared filesystems | zarr v3; opt-in HDF5 output with `codecs = {"ndarray": "hdf5"}` ([trade-offs](design.md#hdf5-output-opt-in)); `tensordir.legacy` reads old HDF5 |
 | Equality of directory contents (`assert_equal_directories`, `Directory.__eq__`) | records compare by type, key and path | compare fields explicitly, or keys |

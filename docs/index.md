@@ -62,7 +62,7 @@ Features marked **experimental** may change or be removed; [Design](design.md#ex
 lists them.
 
 See the quickstart in the repository's `README.md`, the [example notebooks](examples/index.md),
-[migrating](migrating.md) from datamate, flyvis and another project, [extending](extending.md)
+[migrating](migrating.md) from datamate and flyvis, [extending](extending.md)
 tensordir and the [design](design.md).
 
 ## History

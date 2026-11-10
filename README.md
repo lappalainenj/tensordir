@@ -86,10 +86,9 @@ child types declared by nesting classes, and any file read or written by its suf
 [directories](docs/directories.md).
 
 Read on: [example notebooks](docs/examples/index.md) for every use case,
-[migrating from datamate, flyvis and another project](docs/migrating.md), [extending](docs/extending.md) and
+[migrating from datamate and flyvis](docs/migrating.md), [extending](docs/extending.md) and
 [design](docs/design.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE) for the notices carried over from datamate, artisan, flyvis and
-another project.
+MIT. See [LICENSE](LICENSE) for the notices carried over from datamate, artisan and flyvis.

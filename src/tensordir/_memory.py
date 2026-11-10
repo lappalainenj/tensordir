@@ -5,11 +5,11 @@ parquet, `{str: Tensor}` as safetensors, and any codec you register: images, mod
 written by that codec into `output.td/`, which appears by rename. numpy arrays, plain Python
 values and everything else take joblib's pickle path. Loads are lazy where the codec supports it.
 `output.zarr` and `output.parquet` from earlier tensordir versions and `output.h5` from the
-flyvis and another project netCDF backends stay readable.
+flyvis netCDF backends stay readable.
 
 Adapted from flyvis (`flyvis/utils/xarray_joblib_backend.py`, MIT, Copyright (c) 2023 Janne K.
-Lappalainen, Fabian D. Tschopp, Mason McGill, Jakob H. Macke, Srinivas C. Turaga) and its
-another project revision (pinned engine, atomic writes, DataArray round-trip).
+Lappalainen, Fabian D. Tschopp, Mason McGill, Jakob H. Macke, Srinivas C. Turaga) and a later
+revision of it (pinned engine, atomic writes, DataArray round-trip).
 
 joblib exposes store backends only through the private `joblib._store_backends` module; the
 supported joblib range is pinned in `pyproject.toml` and checked by contract tests.

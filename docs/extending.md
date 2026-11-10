@@ -907,7 +907,7 @@ There are two ways to store another type natively:
 
 Results stored by a codec live in `output.td/` next to joblib's `metadata.json`, written to a
 temporary directory and renamed. Caches written by earlier tensordir versions (`output.zarr`,
-`output.parquet`) and by the flyvis and another project netCDF backends (`output.h5`) still load.
+`output.parquet`) and by the flyvis netCDF backends (`output.h5`) still load.
 
 ```python
 # requires: joblib torch safetensors
