@@ -140,6 +140,32 @@ def open_store_group(directory: Path, *, immutable: bool) -> "zarr.Group":
         return zarr.open_group(store, mode="r", zarr_format=3, use_consolidated=None)
 
 
+#: Bytes of decoded chunks and shard indexes tensorstore keeps for finished records, per process.
+TENSORSTORE_CACHE_BYTES = 256 << 20
+_TENSORSTORE_CONTEXT: Any = None
+
+
+def open_tensorstore(directory: Path, name: str, *, immutable: bool) -> Any:
+    """The zarr array `data.zarr/<name>` opened read-only with tensorstore (needs the
+    `tensorstore` extra). Finished, immutable records share a process-wide cache and never
+    recheck it; others reread metadata and data on every open."""
+    import tensorstore as ts
+
+    global _TENSORSTORE_CONTEXT
+    spec: dict[str, Any] = {
+        "driver": "zarr3",
+        "kvstore": {"driver": "file", "path": f"{directory / STORE / name}/"},
+    }
+    if immutable:
+        if _TENSORSTORE_CONTEXT is None:
+            _TENSORSTORE_CONTEXT = ts.Context({"cache_pool": {"total_bytes_limit": TENSORSTORE_CACHE_BYTES}})
+        context = _TENSORSTORE_CONTEXT
+        spec.update(recheck_cached_data=False, recheck_cached_metadata=False)
+    else:
+        context = ts.Context()
+    return ts.open(spec, read=True, open=True, context=context).result()
+
+
 def group_member(group: "zarr.Group", name: str) -> Any:
     """`group[name]`, falling back to the member's own metadata when consolidated metadata is
     older than the member (a field written after the last consolidation)."""

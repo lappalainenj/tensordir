@@ -194,6 +194,61 @@ or boolean index array (gathered in the given order). Ranges less than a chunk a
 and every read of the call runs concurrently through zarr's async API, so a query step of many
 small ranges costs about one round trip on object storage instead of one per range.
 
+`record.read(..., engine="tensorstore")` (or `$TENSORDIR_READ_ENGINE=tensorstore`) reads zarr
+fields with tensorstore instead, from the `tensorstore` extra. It reads the same files in fewer,
+larger reads and was about twice as fast as zarr-python on local disk in tensordir's benchmark;
+fields it cannot open (e.g. string arrays) fall back to zarr. zarr stays the default.
+
+## Publishing to write-once storage
+
+Object-store mounts such as mountpoint-s3 accept each file as one sequential write, without
+rename or overwrite, so a record cannot be built there: builds rename a temporary directory into
+place and leases rewrite their heartbeat. Build in a local root and publish:
+
+```python
+fit.publish("/mnt/s3/results")               # one record; returns it in the new root
+fit.publish("/mnt/s3/results", upstream=True)  # and every record it was built from
+```
+
+```bash
+tensordir --root /scratch/run publish /mnt/s3/results Fit
+```
+
+Each file is streamed once, data first and `_meta.json` last, so a reader of the destination
+sees `absent` until the copy is complete. A record already there with the same key is kept; a
+partial copy (no `_meta.json`) is removed file by file and redone. A root created by `publish`
+carries `.tensordir/published`, and builds and workspace edits there raise `ReadOnlyError`.
+
+## Packs of small records
+
+Each record costs a directory, `_meta.json`, a zarr store and at least two reads to open, which
+is too much for millions of small records that are read together. `td.Pack(T)` stores many
+records of type `T` as one record:
+
+```python
+calls = [Segment.call(i, mesh, lod=0) for i in ids]   # bound and keyed; nothing runs
+pack = td.Pack(Segment)(calls)                        # builds each member once, or reopens
+member = pack.member(calls[0])                        # a read-only Segment
+member.key == Segment.compute_key(ids[0], mesh, lod=0)
+```
+
+- `T.call(*inputs, **settings)` binds and keys a call without touching the filesystem.
+- The pack's key is the digest of its sorted, distinct member keys; order and duplicates do not
+  matter. Its type id is `Pack[<T's type id>]` and it lives under `T`'s root with `T`'s layouts.
+- The build runs each member's `__init__` in a temporary directory (or reads a finished
+  standalone record of the same key), then concatenates each array field along axis 0 into one
+  pack field with row offsets in `<name>.offsets`, members in key order. JSON fields, specs and
+  inputs go into the `members` field. Members may hold numpy arrays and JSON values; a field's
+  trailing shape and dtype must agree across members. A failing member fails the pack.
+- A member is an instance of `T` that reads its rows from the pack: fields, `load`, `read`,
+  `spec`, `inputs`, `tree` and `info` work as on a standalone record, writes raise
+  `ReadOnlyError`. `pack.members` is a `Collection` of all of them.
+- `T.get(...)` and `T.lookup(...)` still find standalone records only; finding a packed member
+  by its call needs the pack.
+- A pack builds only from its calls: `td.Pack(T)(calls)`. `td.Pack(T).get(keys)` reopens a
+  finished pack and raises for one that does not exist.
+- All member arrays are held in memory during the pack build.
+
 ## The `__init__` interface
 
 `__init__` is the build, and its signature is the record type's interface, as datamate's

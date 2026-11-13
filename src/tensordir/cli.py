@@ -1,4 +1,4 @@
-"""Command line: `tensordir [--root R] ls|status|reindex|gc`."""
+"""Command line: `tensordir [--root R] ls|status|reindex|gc|publish`."""
 
 import argparse
 import json
@@ -82,6 +82,22 @@ def _gc(root: Path, args: argparse.Namespace) -> int:
     return 0
 
 
+def _publish(root: Path, args: argparse.Namespace) -> int:
+    """Copy every done record (of one type directory, if given) to the destination root."""
+    from ._record import Record
+
+    destination = Path(args.destination).expanduser().absolute()
+    count = 0
+    for path, meta in index.records(root, args.type):
+        if meta.get("status") != "done":
+            continue
+        Record.at(path).publish(destination, upstream=args.upstream)
+        count += 1
+        print(f"published {path.parent.name}/{path.name}")
+    print(f"{count} records published to {destination}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tensordir", description="Inspect and maintain a tensordir root.")
     parser.add_argument(
@@ -99,6 +115,13 @@ def main(argv: list[str] | None = None) -> int:
     gc = commands.add_parser("gc", help="remove stale leases, orphaned temporary builds and trash")
     gc.add_argument("--dry-run", action="store_true")
     gc.set_defaults(run=_gc)
+    publish = commands.add_parser(
+        "publish", help="copy done records to another root with write-once files (e.g. a mountpoint-s3 mount)"
+    )
+    publish.add_argument("destination", help="destination root")
+    publish.add_argument("type", nargs="?", help="record type directory name, e.g. Fit")
+    publish.add_argument("--upstream", action="store_true", help="also publish the records each was built from")
+    publish.set_defaults(run=_publish)
     args = parser.parse_args(argv)
     return args.run(get_root(root=args.root), args)
 

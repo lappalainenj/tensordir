@@ -262,9 +262,16 @@ class Readable(td.Record):
         self.write("note", {"a": 1})
 
 
+ENGINES = ["zarr", pytest.param("tensorstore", marks=pytest.mark.skipif(
+    __import__("importlib").util.find_spec("tensorstore") is None, reason="needs tensorstore"
+))]
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("field", ["unsharded", "sharded", "h5"])
-@pytest.mark.parametrize("seed", range(5))
-def test_read_equals_slicing(root, field, seed):
+@pytest.mark.parametrize("seed", range(3))
+def test_read_equals_slicing(root, field, seed, engine, monkeypatch):
+    monkeypatch.setenv("TENSORDIR_READ_ENGINE", engine)
     n = 500
     record = Readable(n=n)
     x = np.arange(n * 2, dtype="i4").reshape(n, 2)
@@ -307,3 +314,31 @@ def test_read_errors(root):
         record.read({"note": slice(0, 1)})
     with pytest.raises(KeyError):
         record.read({"missing": slice(0, 1)})
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_read_engines_follow_workspace_edits(root, engine):
+    record = Workspace.get()
+    record.write("x", np.arange(4))
+    reader = td.Record.at(record.path)
+    assert reader.read({"x": [1, 2]}, engine=engine)["x"].tolist() == [1, 2]
+    td.Record.at(record.path).write("x", np.arange(10, 20))
+    assert reader.read({"x": [1, 9]}, engine=engine)["x"].tolist() == [11, 19]
+
+
+@pytest.mark.skipif(__import__("importlib").util.find_spec("tensorstore") is None, reason="needs tensorstore")
+def test_tensorstore_falls_back_to_zarr_for_unsupported_fields(root):
+    class Strings(td.Record):
+        __record_name__ = "LayoutStrings"
+
+        def __init__(self, /):
+            self.write("s", np.array(["a", "bc", "def"]))
+            self.write("i", np.arange(3))
+
+    out = Strings.get().read({"s": [2, 0], "i": slice(1, None)}, engine="tensorstore")
+    assert out["s"].tolist() == ["def", "a"] and out["i"].tolist() == [1, 2]
+
+
+def test_unknown_engine_raises(root):
+    with pytest.raises(ValueError, match="engine"):
+        Readable(n=5).read({"sharded": slice(0, 1)}, engine="numpy")

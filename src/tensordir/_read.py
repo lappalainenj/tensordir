@@ -5,6 +5,7 @@ costs a few numpy calls, not a Python loop per range.
 """
 
 import asyncio
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -138,10 +139,16 @@ class _Plan:
         return data[index]
 
 
-def read_rows(record: Any, request: Mapping[str, Any]) -> dict[str, np.ndarray]:
+ENGINES = ("zarr", "tensorstore")
+
+
+def read_rows(record: Any, request: Mapping[str, Any], *, engine: str | None = None) -> dict[str, np.ndarray]:
     """The rows `request` asks of each field of `record`; see `Record.read`."""
     import zarr
 
+    engine = engine or os.environ.get("TENSORDIR_READ_ENGINE") or "zarr"
+    if engine not in ENGINES:
+        raise ValueError(f"unknown read engine {engine!r}; use one of {ENGINES}")
     plans: dict[str, _Plan] = {}
     for name, value in request.items():
         array = record[name]
@@ -150,6 +157,11 @@ def read_rows(record: Any, request: Mapping[str, Any]) -> dict[str, np.ndarray]:
         plans[name] = _Plan(array, value)
     zarr_plans = [p for p in plans.values() if isinstance(p.array, zarr.Array) and p.spans]
     datas: dict[int, list] = {}
+    if engine == "tensorstore" and zarr_plans:
+        stores = {id(p): record._tensorstore(name) for name, p in plans.items() if p in zarr_plans}
+        by_ts = [p for p in zarr_plans if stores[id(p)] is not None]
+        datas.update(_read_tensorstore(by_ts, stores))
+        zarr_plans = [p for p in zarr_plans if stores[id(p)] is None]
     if zarr_plans:
         from zarr.core.sync import sync
 
@@ -159,7 +171,7 @@ def read_rows(record: Any, request: Mapping[str, Any]) -> dict[str, np.ndarray]:
             )
 
         flat = iter(sync(fetch()))
-        datas = {id(p): [next(flat) for _ in p.spans] for p in zarr_plans}
+        datas.update({id(p): [next(flat) for _ in p.spans] for p in zarr_plans})
     out = {}
     for name, plan in plans.items():
         data = datas.get(id(plan))
@@ -167,3 +179,14 @@ def read_rows(record: Any, request: Mapping[str, Any]) -> dict[str, np.ndarray]:
             data = [plan.array[a:b] for a, b in plan.spans]
         out[name] = plan.assemble(data)
     return out
+
+
+def _read_tensorstore(plans: list[_Plan], stores: dict[int, Any]) -> dict[int, list]:
+    """Every span of `plans` read in one tensorstore batch."""
+    if not plans:
+        return {}
+    import tensorstore as ts
+
+    with ts.Batch() as batch:
+        futures = {id(p): [stores[id(p)][a:b].read(batch=batch) for a, b in p.spans] for p in plans}
+    return {k: [f.result() for f in fs] for k, fs in futures.items()}

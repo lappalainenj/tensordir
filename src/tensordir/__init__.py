@@ -21,6 +21,7 @@ from .errors import (
 from .external import DeltaRef, ParquetRef, SnapshotChanged
 from .index import reindex
 from .layout import Layout
+from .pack import Call, Pack
 from ._signature import transient
 from ._stages import Progress, Stage, StageOrderError, StageProgress, Stages
 from ._record import Record
@@ -58,6 +59,7 @@ def needs_compute(func, *args, **kwargs) -> bool:
 
 __all__ = [
     "BuildFailed",
+    "Call",
     "CanonicalizationError",
     "Codec",
     "Collection",
@@ -71,6 +73,7 @@ __all__ = [
     "Layout",
     "Level",
     "NodeId",
+    "Pack",
     "ParquetRef",
     "ReadOnlyError",
     "Record",

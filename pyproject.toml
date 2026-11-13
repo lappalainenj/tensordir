@@ -57,7 +57,10 @@ delta = [
 hdf5 = [
     "h5py>=3.10",
 ]
-all = ["tensordir[xarray,memory,tables,typing,legacy,torch,delta,hdf5]"]
+tensorstore = [
+    "tensorstore>=0.1.70",
+]
+all = ["tensordir[xarray,memory,tables,typing,legacy,torch,delta,hdf5,tensorstore]"]
 
 [project.scripts]
 tensordir = "tensordir.cli:main"

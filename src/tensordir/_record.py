@@ -15,23 +15,37 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Self
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Self
 
 import numpy as np
 
 from . import _provenance
+from ._publish import check_buildable
 from ._canonical import canonical, sha256, untag
 from ._directory import Directory
 from ._files import read_file, write_file
 from ._lease import Lease, lease_state
 from ._root import get_root
-from .codecs import NdarrayCodec, atomic_path, codec_for, consolidate, get_codec, group_member, open_store_group, remove_tree
+from .codecs import (
+    NdarrayCodec,
+    atomic_path,
+    codec_for,
+    consolidate,
+    get_codec,
+    group_member,
+    open_store_group,
+    open_tensorstore,
+    remove_tree,
+)
 from .dims import dims_for
 from .errors import BuildFailed, DimsError, KeyCollision, ReadOnlyError, RecordBusy
 from .layout import Layout, resolve_layout
 from ._signature import Interface, interface_of
 from ._stages import Progress, check_required, progress_of, stages_of
 from .spec import Spec as _Spec
+
+if TYPE_CHECKING:
+    from .pack import Call
 
 __all__ = ["Record", "Status", "FORMAT"]
 
@@ -158,6 +172,8 @@ class Record(Directory):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        if cls.__dict__.get("_tensordir_view"):
+            return  # a read-only view of a packed record type: not a type of its own
         if "Spec" in cls.__dict__:
             raise TypeError(
                 f"{cls.__qualname__}: declare settings as keyword-only __init__ parameters; the Spec is generated"
@@ -225,6 +241,15 @@ class Record(Directory):
     def open(cls, path: str | os.PathLike = ".") -> Self:
         """The record at `path`: `Record.at(path)`."""
         return Record.at(path) if cls is Record else cls.at(path)
+
+    @classmethod
+    def call(cls, *inputs: Any, **settings: Any) -> "Call":
+        """This type's call with these inputs and settings, bound and keyed but not built (no
+        filesystem access); `td.Pack(cls)(calls)` builds many into one pack."""
+        from .pack import Call
+
+        inputs, spec, transients = cls._interface.bind(inputs, settings)
+        return Call(cls, inputs, spec, transients, cls._key_of(spec, cls._identify(inputs)))
 
     @classmethod
     def compute_key(cls, *inputs: Any, **settings: Any) -> str:
@@ -325,7 +350,7 @@ class Record(Directory):
             meta = _read_json(path / META)
             if meta is None:
                 raise FileNotFoundError(f"no record at {path}")
-            klass = _REGISTRY.get(meta["type"], cls)
+            klass = resolve_type(meta["type"])
             return klass._new(path, key=meta["key"], managed_root=_managed_root(path, meta["key"]))
         inputs, spec, transients = cls._interface.bind(inputs, settings)
         key = cls._key_of(spec, cls._identify(inputs))
@@ -391,6 +416,7 @@ class Record(Directory):
             if meta and meta["status"] == "failed" and not retry_failed:
                 raise BuildFailed(self, meta.get("error") or {})
             if not checked:
+                check_buildable(self._root)
                 self._check_upstream(inputs)
                 checked = True
             lease = Lease.acquire(self._lock, ttl=cls.lease_ttl, heartbeat=cls.heartbeat_interval)
@@ -686,19 +712,44 @@ class Record(Directory):
 
         The group is reopened when a workspace record's `_meta.json` changes; inside a build, or
         while the record is not done, every call opens it afresh."""
-        if self._writable or self._disk_meta() is None or self._done_meta is None:
+        cached = self._store_cache()
+        if cached is None:
             return group_member(open_store_group(self._dir, immutable=False), name)
-        stamp = self._done_mtime
-        cached = self.__dict__.get("_zarr_cache")
-        if cached is None or cached[0] != stamp:
-            group = open_store_group(self._path, immutable=not type(self).mutable)
-            cached = self.__dict__["_zarr_cache"] = (stamp, group, {})
         arrays = cached[2]
         if name not in arrays:
             arrays[name] = group_member(cached[1], name)
         return arrays[name]
 
-    def read(self, request: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    def _tensorstore(self, name: str) -> Any:
+        """Field `name` opened with tensorstore, kept like `_zarr_array`; None if tensorstore
+        cannot open it (e.g. a dtype it does not support)."""
+        cached = self._store_cache()
+        if cached is None:
+            try:
+                return open_tensorstore(self._dir, name, immutable=False)
+            except Exception:
+                return None
+        stores = cached[3]
+        if name not in stores:
+            try:
+                stores[name] = open_tensorstore(self._path, name, immutable=not type(self).mutable)
+            except Exception:
+                stores[name] = None
+        return stores[name]
+
+    def _store_cache(self) -> tuple | None:
+        """`(stamp, group, zarr arrays, tensorstores)` of a done record, renewed when a workspace
+        record's `_meta.json` changes; None inside a build or while the record is not done."""
+        if self._writable or self._disk_meta() is None or self._done_meta is None:
+            return None
+        stamp = self._done_mtime
+        cached = self.__dict__.get("_zarr_cache")
+        if cached is None or cached[0] != stamp:
+            group = open_store_group(self._path, immutable=not type(self).mutable)
+            cached = self.__dict__["_zarr_cache"] = (stamp, group, {}, {})
+        return cached
+
+    def read(self, request: Mapping[str, Any], *, engine: str | None = None) -> dict[str, np.ndarray]:
         """Rows of several array fields in one call: `{name: rows}` to `{name: ndarray}`.
 
         `rows` is a slice, a list of slices or `(start, stop)` pairs (the ranges' rows
@@ -706,10 +757,15 @@ class Record(Directory):
         the given order, repeats allowed). Ranges of each field are merged when they lie within
         one chunk of each other, and all reads of the call run concurrently, so a query step of
         many small ranges costs about one round trip on object storage.
+
+        `engine` reads zarr fields with `"zarr"` (zarr-python's async API) or `"tensorstore"`
+        (needs the `tensorstore` extra; several times faster on local disk in tensordir's
+        benchmark; fields it cannot open fall back to zarr). The default is
+        `$TENSORDIR_READ_ENGINE`, else `"zarr"`. HDF5 fields are read span by span.
         """
         from ._read import read_rows
 
-        return read_rows(self, request)
+        return read_rows(self, request, engine=engine)
 
     def __getitem__(self, name: str) -> Any:
         """A lazy handle: `zarr.Array` for arrays, an unloaded xarray object for xarray fields."""
@@ -730,6 +786,23 @@ class Record(Directory):
         path = self._dir / name
         write_file(path, value)
         return path
+
+    def publish(self, root: str | os.PathLike, *, upstream: bool = False) -> Self:
+        """Copy this finished record to `root` and return it there; nothing is built.
+
+        Each file is written once, sequentially and without rename, data first and `_meta.json`
+        last, so `root` may be an object-store mount that accepts only such writes (mountpoint-s3)
+        and readers there see the record as `absent` until the copy is complete. A record already
+        in `root` with the same key is kept (a workspace record is copied again); a partial copy
+        is removed and redone. `upstream=True` also publishes every record this one was built
+        from, so its inputs reopen in `root`.
+
+        A root created by `publish` is marked read-only: builds and workspace edits there raise
+        `ReadOnlyError`, since both need rename and leases.
+        """
+        from ._publish import publish
+
+        return publish(self, root, upstream=upstream)
 
     def move(self, id: str) -> Self:
         """Records live where their key puts them; copy a record to another root instead."""
@@ -833,6 +906,7 @@ class Record(Directory):
             raise ReadOnlyError(f"{self!r}: optional stage {stage!r} may not rewrite field {name!r}")
 
     def _edit_lease(self) -> Lease:
+        check_buildable(self._root)
         cls = type(self)
         deadline = time.monotonic() + cls.lease_ttl
         delay = 0.005
@@ -1182,7 +1256,12 @@ def _check_type(name: str, annotation: Any, value: Any) -> None:
 
 def resolve_type(type_id: str) -> type[Record]:
     """The record class registered under `type_id`; `Record` if no such class is defined."""
-    return _REGISTRY.get(type_id, Record)
+    found = _REGISTRY.get(type_id)
+    if found is None:
+        from .pack import pack_type_for
+
+        found = pack_type_for(type_id)
+    return found or Record
 
 
 #: The builds running in this process, by lock path, with the thread running each.

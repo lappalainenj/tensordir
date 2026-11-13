@@ -84,6 +84,12 @@
 
 ::: tensordir.Layout
 
+::: tensordir.Pack
+
+::: tensordir.Call
+
+::: tensordir.pack.PackRecord
+
 ::: tensordir.Codec
 
 ::: tensordir.register_codec
