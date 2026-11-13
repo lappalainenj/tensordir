@@ -18,6 +18,7 @@ touching existing results. The documentation build executes all of them, and
 | [Accessors](10_accessors.ipynb) | `.td.where` on `DataFrame`, `Series`, `DataArray`, `Dataset`; `.td.diff` on table rows; `TENSORDIR_NO_ACCESSORS` |
 | [External tables](11_external_tables.ipynb) | `ParquetRef` listing digests, `DeltaRef` versions, column and row selection, DuckDB, `materialize`, `SnapshotChanged` |
 | [datamate directories](12_legacy_datamate.ipynb) | `tensordir.legacy.open_datamate`, copying a datamate result into a record |
+| [Storage and fast reads](13_storage_and_reads.ipynb) | `td.Layout` chunks and shards, `layouts`, layouts outside the key, consolidated metadata, `record.read` for many ranges and gathers, the tensorstore engine, `publish` to write-once storage, `T.call` and `td.Pack` for many small records |
 
 To run a notebook yourself, install the extras and Jupyter, then open it from `docs/examples/`:
 

@@ -18,6 +18,7 @@ nav:
       - Accessors: examples/10_accessors.ipynb
       - External tables: examples/11_external_tables.ipynb
       - datamate directories: examples/12_legacy_datamate.ipynb
+      - Storage and fast reads: examples/13_storage_and_reads.ipynb
   - Directories: directories.md
   - Migrating: migrating.md
   - Extending: extending.md

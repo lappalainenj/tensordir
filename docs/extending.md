@@ -30,6 +30,10 @@ the record directory and returns a JSON-able dict that is saved in the record's 
   codec, so register it in the module that defines the record class.
 - Builds run in a temporary directory that is renamed into place, so `write` needs no atomic
   file handling of its own (except for `in_place = True` records).
+- A codec that stores chunked arrays can set `takes_layout = True`; `write` and `append` then
+  receive `layout=`, a `td.Layout` from the call or the record type's `layouts`, or `None` for
+  the codec's own default (`layout.resolve(shape, dtype)` gives chunk and shard shapes).
+  Passing `layout=` to a codec without layouts raises `TypeError`.
 
 ### A torch model that rebuilds itself
 

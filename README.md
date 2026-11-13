@@ -31,7 +31,7 @@ the configuration that produced it, and replaces the implementation.
 Not yet on PyPI. From a clone:
 
 ```bash
-uv sync --all-extras          # core: numpy, zarr>=3; extras: xarray, memory, tables, typing, legacy, torch, delta, hdf5
+uv sync --all-extras          # core: numpy, zarr>=3; extras: xarray, memory, tables, typing, legacy, torch, delta, hdf5, tensorstore
 uv run pytest
 ```
 
@@ -71,7 +71,7 @@ results/
 ├── Fit/
 │   └── 3f2a9c0e1b7d4a55/          # first 16 hex digits of the sha256 key
 │       ├── _meta.json           # key, spec, inputs, status, fields, timings, provenance
-│       ├── data.zarr/centres      # zarr v3 array, dimension_names ["column", "dim"]
+│       ├── data.zarr/centres      # zarr v3 array, dimension_names ["column", "dim"]; chunks and shards by td.Layout
 │       └── summary.json
 └── .tensordir/                    # leases, temporary builds, index.parquet
 ```

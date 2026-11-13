@@ -38,6 +38,10 @@ Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray r
 | Organize work in named folders | `Directory` subclasses with metadata fields and child types; `resolve`, `new`, `move`, `archive`, `active` |
 | Read and write any file by suffix | `load`, `save`, `register_suffix`, `Image`, `Video` |
 | Store values | `self.x = ...`, `self["x"] = ...`, `write(codec=...)`, `append` |
+| Choose chunks and shards | `Layout`, the class attribute `layouts`, `write(layout=...)`, `append(layout=...)` |
+| Read many rows of several fields at once | `record.read({name: ranges or indices})`, `engine="tensorstore"` |
+| Store many small records as one | `Record.call`, `Pack`, `pack.member`, `pack.members` |
+| Copy finished records to write-once storage (S3 mounts) | `record.publish(root)`, `tensordir publish` |
 | Name array axes | jaxtyping field annotations, `Dims`, `register_dims` |
 | Work with many records | `Record.query`, `Record.info`, `Collection.where`, `Collection.table`, `Collection.map`, `reindex` |
 | Filter tables, records and xarray results | `where`, `any_of`, `exactly` |
@@ -45,7 +49,7 @@ Fit.query().map(response, dim="model", coords=["seed"])  # concatenated xarray r
 | Inspect in a notebook | rich reprs of `Spec`, `Record`, `Collection`; `Record.tree()` |
 | Memoize functions | `memory`, `View`, `cached_method`, `needs_compute` |
 | Read datamate directories | `tensordir.legacy.open_datamate` |
-| Maintain a root | `tensordir ls`, `status`, `reindex`, `gc` |
+| Maintain a root | `tensordir ls`, `status`, `reindex`, `gc`, `publish` |
 
 **Where records go.** A record type stores its records under `base / root`: the base root is
 the innermost `use_root` block, else `set_root`, else `$TENSORDIR_ROOT`, else the working
