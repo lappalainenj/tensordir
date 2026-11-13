@@ -92,7 +92,7 @@ class Log(td.Record):
 
 def test_append_extends_a_resizable_dataset(root):
     record = Log.get()
-    record.append("loss", [1.0, 0.5], chunk=4)
+    record.append("loss", [1.0, 0.5], layout=td.Layout(chunks=(4,)))
     record.append("loss", np.float64(0.25))  # a scalar is one row
     reopened = td.Record.at(record.path)  # another handle, after reopening
     reopened.append("loss", [0.125, 0.0625])

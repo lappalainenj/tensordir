@@ -150,6 +150,50 @@ checkpoints and summaries into it over time. Rules:
 - Array fields are written in place, so a reader can see a partly written array during an edit.
   File codecs (json, parquet, safetensors) replace their file atomically.
 
+## Storage layout and multi-range reads
+
+An array field is a zarr v3 array in `data.zarr/<name>`. Its **layout** (chunk and shard shapes)
+changes how the bytes sit on disk, never what a reader gets back, so it is a storage option and
+never enters the key:
+
+```python
+class Mesh(td.Record):
+    layouts = {
+        "*": td.Layout(chunk_bytes=128 << 10, shard_bytes=128 << 20),
+        "neighbor_indices": td.Layout(chunk_bytes=32 << 10, shard_bytes=128 << 20),
+    }
+
+mesh.write("faces", faces, layout=td.Layout(chunk_bytes=1 << 20))  # per call
+```
+
+- The layout of a field is the `layout=` argument of `write` or `append`, else the type's
+  `layouts[name]`, else `layouts["*"]`, else the default. The manifest stores the resulting
+  `{"chunks": ..., "shards": ...}`.
+- `chunk_bytes` and `shard_bytes` are targets in uncompressed bytes. Chunks run along axis 0 and
+  span the trailing axes whole, the shape row-range reads want; `chunks=` and `shards=` give
+  explicit shapes. A shard is one file holding many chunks and an index of their byte ranges, so
+  sharding bounds the files per array without making reads coarser.
+- Default for `write`: 128 KB chunks in shards of up to 128 MB. An array of one chunk (up to
+  128 KB) is never sharded, and arrays up to 128 MB are one file. Default for `append`: 128 KB
+  chunks without shards, because each append rewrites the last shard. A field keeps the layout it
+  was created with.
+- HDF5 fields take the chunk shape of an explicit layout and ignore shards.
+- A layout can also be a `td.field(hashed=False)` setting that the build forwards to `write`.
+
+When a build finishes, tensordir writes the metadata of every zarr array into the root
+`data.zarr/zarr.json` (zarr's consolidated metadata); workspace edits rewrite it before
+`_meta.json`. A record handle opens the zarr group once and keeps its arrays, so `record[name]`
+costs no metadata read after the first; a workspace handle reopens the group when `_meta.json`
+changes. Handles of finished, immutable records also keep each shard's index after its first
+read, which zarr would otherwise read again before every read from that shard. Records written
+before this keep opening, with one metadata read per array.
+
+`record.read({name: rows, ...})` reads rows of several array fields in one call. `rows` is a
+slice, a list of slices or `(start, stop)` pairs (concatenated in request order), or an integer
+or boolean index array (gathered in the given order). Ranges less than a chunk apart are merged,
+and every read of the call runs concurrently through zarr's async API, so a query step of many
+small ranges costs about one round trip on object storage instead of one per range.
+
 ## The `__init__` interface
 
 `__init__` is the build, and its signature is the record type's interface, as datamate's

@@ -19,7 +19,10 @@ import os
 import pickle
 import shutil
 import sys
+import threading
 import uuid
+import warnings
+from collections import OrderedDict
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +31,7 @@ from typing import Any, ClassVar
 import numpy as np
 
 from .errors import DimsError
+from .layout import APPEND_DEFAULT, DEFAULT, Layout
 
 __all__ = ["Codec", "register_codec", "get_codec", "codec_for", "append_array"]
 
@@ -53,6 +57,116 @@ def _group(directory: Path, mode: str = "a") -> "zarr.Group":
     return zarr.open_group(directory / STORE, mode=mode, zarr_format=3)
 
 
+def consolidate(directory: Path) -> None:
+    """Write the metadata of every array and group in `data.zarr` into its root `zarr.json`, so
+    a reader opens the record's arrays with one metadata read. No-op without a zarr store."""
+    if not (directory / STORE / "zarr.json").exists():
+        return
+    import zarr
+
+    with warnings.catch_warnings():  # zarr warns that v3 consolidated metadata is not in the spec
+        warnings.simplefilter("ignore")
+        zarr.consolidate_metadata(directory / STORE, zarr_format=3)
+
+
+#: Bytes of shard indexes kept per open record; an index is a few KB to a few hundred KB.
+SHARD_INDEX_CACHE_BYTES = 64 << 20
+
+
+def _caching_store(path: Path) -> "zarr.abc.store.Store":
+    """A read-only `LocalStore` at `path` that keeps the shard indexes it has read.
+
+    zarr reads a shard's index (a suffix of the shard file) before every read from that shard;
+    for a finished record the index never changes, so it is read once per handle.
+    """
+    from zarr.abc.store import SuffixByteRequest
+    from zarr.storage import LocalStore, WrapperStore
+
+    class ShardIndexCache(WrapperStore):
+        def __init__(self, store: Any) -> None:
+            super().__init__(store)
+            self._cache: OrderedDict = OrderedDict()
+            self._bytes = 0
+            self._lock = threading.Lock()
+
+        def _with_store(self, store: Any) -> "ShardIndexCache":
+            return type(self)(store)
+
+        def _lookup(self, key: str, byte_range: Any) -> Any:
+            if not isinstance(byte_range, SuffixByteRequest):
+                return None
+            with self._lock:
+                found = self._cache.get((key, byte_range.suffix))
+                if found is not None:
+                    self._cache.move_to_end((key, byte_range.suffix))
+                return found
+
+        def _keep(self, key: str, byte_range: Any, value: Any) -> None:
+            if value is None or not isinstance(byte_range, SuffixByteRequest):
+                return
+            with self._lock:
+                self._cache[(key, byte_range.suffix)] = value
+                self._bytes += len(value)
+                while self._bytes > SHARD_INDEX_CACHE_BYTES and len(self._cache) > 1:
+                    _, old = self._cache.popitem(last=False)
+                    self._bytes -= len(old)
+
+        async def get(self, key: str, prototype: Any, byte_range: Any = None) -> Any:
+            found = self._lookup(key, byte_range)
+            if found is None:
+                found = await self._store.get(key, prototype, byte_range)
+                self._keep(key, byte_range, found)
+            return found
+
+        def get_sync(self, key: str, *, prototype: Any = None, byte_range: Any = None) -> Any:
+            found = self._lookup(key, byte_range)
+            if found is None:
+                found = super().get_sync(key, prototype=prototype, byte_range=byte_range)
+                self._keep(key, byte_range, found)
+            return found
+
+    return ShardIndexCache(LocalStore(path, read_only=True))
+
+
+def open_store_group(directory: Path, *, immutable: bool) -> "zarr.Group":
+    """`data.zarr` opened read-only, with consolidated metadata when the record has it; an
+    `immutable` (finished, not workspace) record also caches shard indexes."""
+    import zarr
+
+    path = directory / STORE
+    store = _caching_store(path) if immutable else path
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return zarr.open_group(store, mode="r", zarr_format=3, use_consolidated=None)
+
+
+def group_member(group: "zarr.Group", name: str) -> Any:
+    """`group[name]`, falling back to the member's own metadata when consolidated metadata is
+    older than the member (a field written after the last consolidation)."""
+    try:
+        return group[name]
+    except KeyError:
+        import zarr
+
+        return zarr.open(group.store, path=name, mode="r", zarr_format=3)
+
+
+def _layout_kwargs(spec: dict, layout: Layout) -> dict:
+    kwargs: dict[str, Any] = {}
+    if spec["chunks"] is not None:
+        kwargs["chunks"] = spec["chunks"]
+    if spec["shards"] is not None:
+        kwargs["shards"] = spec["shards"]
+    if layout.compressors != "auto":
+        kwargs["compressors"] = layout.compressors
+    return kwargs
+
+
+def _layout_info(array: Any) -> dict:
+    shards = getattr(array, "shards", None)
+    return {"chunks": list(array.chunks), "shards": list(shards) if shards else None}
+
+
 def _delete_member(directory: Path, name: str) -> None:
     if (directory / STORE).exists():
         group = _group(directory)
@@ -62,9 +176,13 @@ def _delete_member(directory: Path, name: str) -> None:
 
 class Codec:
     """Base class. `write` returns JSON-able info stored in the record's field manifest; `read`
-    receives that info back."""
+    receives that info back.
+
+    A codec that sets `takes_layout = True` receives `layout=` (a `Layout` or None for its own
+    default) in `write` and `append`."""
 
     name: ClassVar[str]
+    takes_layout: ClassVar[bool] = False
 
     def accepts(self, value: Any) -> bool:
         return False
@@ -84,7 +202,7 @@ class Codec:
         raise NotImplementedError
 
     def append(
-        self, directory: Path, name: str, values: Any, *, dims: Sequence[str] | None = None, chunk: int = 1024
+        self, directory: Path, name: str, values: Any, *, dims: Sequence[str] | None = None, layout: Layout | None = None
     ) -> dict:
         """Append rows along axis 0 of field `name`, creating it on first use; returns its info
         with `"append": True`. Only array codecs implement it."""
@@ -104,20 +222,35 @@ class FileCodec(Codec):
 
 
 class NdarrayCodec(Codec):
+    """numpy arrays as zarr v3 arrays; chunks and shards follow the `Layout` (default:
+    `tensordir.layout.DEFAULT`, 128 KB chunks along axis 0 in shards of up to 128 MB)."""
+
     name = "ndarray"
+    takes_layout = True
 
     def accepts(self, value: Any) -> bool:
         return isinstance(value, np.ndarray) and not value.dtype.hasobject
 
-    def write(self, directory, name, value, *, dims=None):
+    def write(self, directory, name, value, *, dims=None, layout=None):
         if dims is not None and len(dims) != value.ndim:
             raise DimsError(f"{name}: {value.ndim}-d array with dims {tuple(dims)}")
+        layout = layout or DEFAULT
+        spec = layout.resolve(value.shape, value.dtype)
         _delete_member(directory, name)
         array = _group(directory).create_array(
-            name, shape=value.shape, dtype=value.dtype, dimension_names=list(dims) if dims else None
+            name,
+            shape=value.shape,
+            dtype=value.dtype,
+            dimension_names=list(dims) if dims else None,
+            **_layout_kwargs(spec, layout),
         )
         array[...] = value
-        return {"dims": list(dims) if dims else None, "shape": list(value.shape), "dtype": value.dtype.str}
+        return {
+            "dims": list(dims) if dims else None,
+            "shape": list(value.shape),
+            "dtype": value.dtype.str,
+            "layout": _layout_info(array),
+        }
 
     def read(self, directory, name, info, *, lazy=True):
         array = _group(directory, "r")[name]
@@ -126,8 +259,8 @@ class NdarrayCodec(Codec):
     def delete(self, directory, name, info):
         _delete_member(directory, name)
 
-    def append(self, directory, name, values, *, dims=None, chunk=1024):
-        return append_array(directory, name, values, dims=dims, chunk=chunk)
+    def append(self, directory, name, values, *, dims=None, layout=None):
+        return append_array(directory, name, values, dims=dims, layout=layout)
 
 
 def _rows(name: str, values: Any, dims: Sequence[str] | None) -> np.ndarray:
@@ -145,21 +278,25 @@ def _check_rows(name: str, values: np.ndarray, shape: tuple[int, ...]) -> None:
 
 
 def append_array(
-    directory: Path, name: str, values: Any, *, dims: Sequence[str] | None = None, chunk: int = 1024
+    directory: Path, name: str, values: Any, *, dims: Sequence[str] | None = None, layout: Layout | None = None
 ) -> dict:
-    """Append `values` along axis 0 of the zarr array `name`, creating it on first use.
+    """Append `values` along axis 0 of the zarr array `name`, creating it on first use with
+    `layout` (default `APPEND_DEFAULT`: 128 KB chunks, no shards; with shards, each append
+    rewrites the last shard). Later appends keep the array's layout.
 
     Readers may briefly see fill values at the tail while a resize is in flight.
     """
     values = _rows(name, values, dims)
     group = _group(directory)
     if name not in group:
+        layout = layout or APPEND_DEFAULT
+        spec = layout.resolve(values.shape, values.dtype, growing=True)
         array = group.create_array(
             name,
             shape=values.shape,
             dtype=values.dtype,
-            chunks=(chunk, *(max(s, 1) for s in values.shape[1:])),
             dimension_names=list(dims) if dims else None,
+            **_layout_kwargs(spec, layout),
         )
         array[...] = values
     else:
@@ -168,7 +305,13 @@ def append_array(
         n = array.shape[0]
         array.resize((n + len(values), *array.shape[1:]))
         array[n:] = values.astype(array.dtype, copy=False)
-    return {"dims": list(dims) if dims else None, "shape": list(array.shape), "dtype": array.dtype.str, "append": True}
+    return {
+        "dims": list(dims) if dims else None,
+        "shape": list(array.shape),
+        "dtype": array.dtype.str,
+        "append": True,
+        "layout": _layout_info(array),
+    }
 
 
 class XarrayCodec(Codec):
@@ -378,8 +521,9 @@ class Hdf5Codec(FileCodec):
 
     name = "hdf5"
     suffix = ".h5"
+    takes_layout = True
 
-    def write(self, directory, name, value, *, dims=None):
+    def write(self, directory, name, value, *, dims=None, layout=None):
         import h5py
 
         value = np.asarray(value)
@@ -387,12 +531,15 @@ class Hdf5Codec(FileCodec):
             raise TypeError(f"{name}: object arrays have no HDF5 form")
         if dims is not None and len(dims) != value.ndim:
             raise DimsError(f"{name}: {value.ndim}-d array with dims {tuple(dims)}")
+        chunks = layout.resolve(value.shape, value.dtype)["chunks"] if layout is not None else None
         with atomic_path(self.path(directory, name)) as tmp:
             with h5py.File(tmp, "w", locking=False) as f:
-                dataset = f.create_dataset("data", data=value)
+                dataset = f.create_dataset("data", data=value, chunks=chunks if value.size else None)
                 for axis, label in enumerate(dims or ()):
                     dataset.dims[axis].label = label
-        return {"dims": list(dims) if dims else None, "shape": list(value.shape), "dtype": value.dtype.str}
+                stored = dataset.chunks
+        info = {"dims": list(dims) if dims else None, "shape": list(value.shape), "dtype": value.dtype.str}
+        return {**info, "layout": {"chunks": list(stored) if stored else None, "shards": None}}
 
     def read(self, directory, name, info, *, lazy=True):
         import h5py
@@ -403,7 +550,7 @@ class Hdf5Codec(FileCodec):
         with f:
             return f["data"][()]
 
-    def append(self, directory, name, values, *, dims=None, chunk=1024):
+    def append(self, directory, name, values, *, dims=None, layout=None):
         import h5py
 
         values = _rows(name, values, dims)
@@ -417,7 +564,7 @@ class Hdf5Codec(FileCodec):
                         "data",
                         data=values,
                         maxshape=(None, *values.shape[1:]),
-                        chunks=(chunk, *(max(s, 1) for s in values.shape[1:])),
+                        chunks=(layout or APPEND_DEFAULT).resolve(values.shape, values.dtype, growing=True)["chunks"],
                     )
                     for axis, label in enumerate(dims or ()):
                         dataset.dims[axis].label = label

@@ -82,6 +82,8 @@
 
 ::: tensordir.Video
 
+::: tensordir.Layout
+
 ::: tensordir.Codec
 
 ::: tensordir.register_codec

@@ -95,7 +95,9 @@ def test_layout_and_metadata(root):
     assert meta["key"] == rec.key and len(rec.key) == 64
     assert meta["type"] == "Square" and meta["status"] == "done" and meta["schema_version"] == 0
     assert meta["spec"] == {"n": 3, "scale": 2.0, "device": "cpu"}
-    assert meta["fields"]["values"] == {"codec": "ndarray", "dims": ["point"], "shape": [3], "dtype": "<f8"}
+    assert meta["fields"]["values"] == {
+        "codec": "ndarray", "dims": ["point"], "shape": [3], "dtype": "<f8", "layout": {"chunks": [3], "shards": None}
+    }
     assert meta["fields"]["summary"]["codec"] == "json"
     prov = meta["provenance"]
     assert prov["pid"] > 0 and prov["host"] and "numpy" in prov["packages"]

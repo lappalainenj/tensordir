@@ -25,9 +25,10 @@ from ._directory import Directory
 from ._files import read_file, write_file
 from ._lease import Lease, lease_state
 from ._root import get_root
-from .codecs import atomic_path, codec_for, get_codec, remove_tree
+from .codecs import NdarrayCodec, atomic_path, codec_for, consolidate, get_codec, group_member, open_store_group, remove_tree
 from .dims import dims_for
 from .errors import BuildFailed, DimsError, KeyCollision, ReadOnlyError, RecordBusy
+from .layout import Layout, resolve_layout
 from ._signature import Interface, interface_of
 from ._stages import Progress, check_required, progress_of, stages_of
 from .spec import Spec as _Spec
@@ -141,6 +142,10 @@ class Record(Directory):
     #: would be chosen: `{"ndarray": "hdf5"}` stores arrays, including `append`ed ones, as HDF5
     #: files instead of zarr (see `tensordir.codecs.Hdf5Codec` for the trade-offs).
     codecs: ClassVar[Mapping[str, str]] = {}
+    #: Storage layouts of array fields, by field name or `"*"` for every array field:
+    #: `layouts = {"*": td.Layout(chunk_bytes=128 << 10, shard_bytes=128 << 20)}`. A `layout=`
+    #: argument to `write` or `append` takes precedence. Layouts never enter the key.
+    layouts: ClassVar[Mapping[str, Layout]] = {}
 
     _is_record: ClassVar[bool] = True
 
@@ -159,6 +164,9 @@ class Record(Directory):
             )
         cls._interface = interface_of(cls, cls.__init__)
         cls.Spec = cls._interface.spec
+        for field_name, layout in cls.layouts.items():
+            if not isinstance(layout, Layout):
+                raise TypeError(f"{cls.__qualname__}.layouts[{field_name!r}] must be a tensordir.Layout")
         for stages in stages_of(cls):
             for name in stages.stages:
                 if hasattr(Record, name):
@@ -647,6 +655,8 @@ class Record(Directory):
         return meta["fields"] if meta else {}
 
     def _write_meta(self) -> None:
+        if self._meta.get("status") == "done":
+            consolidate(self._dir)  # before _meta.json, which readers watch for changes
         with atomic_path(self._dir / META) as tmp:
             tmp.write_text(json.dumps(self._meta, indent=1))
 
@@ -665,7 +675,41 @@ class Record(Directory):
         info = self._manifest().get(name)
         if info is None:
             raise KeyError(f"{self!r} has no field {name!r}; fields: {self.keys()}")
-        return get_codec(info["codec"]).read(self._dir, name, info, lazy=lazy)
+        codec = get_codec(info["codec"])
+        if type(codec) is NdarrayCodec:
+            array = self._zarr_array(name)
+            return array if lazy else array[...]
+        return codec.read(self._dir, name, info, lazy=lazy)
+
+    def _zarr_array(self, name: str) -> Any:
+        """The zarr array of field `name`, from a group opened once per handle.
+
+        The group is reopened when a workspace record's `_meta.json` changes; inside a build, or
+        while the record is not done, every call opens it afresh."""
+        if self._writable or self._disk_meta() is None or self._done_meta is None:
+            return group_member(open_store_group(self._dir, immutable=False), name)
+        stamp = self._done_mtime
+        cached = self.__dict__.get("_zarr_cache")
+        if cached is None or cached[0] != stamp:
+            group = open_store_group(self._path, immutable=not type(self).mutable)
+            cached = self.__dict__["_zarr_cache"] = (stamp, group, {})
+        arrays = cached[2]
+        if name not in arrays:
+            arrays[name] = group_member(cached[1], name)
+        return arrays[name]
+
+    def read(self, request: Mapping[str, Any]) -> dict[str, np.ndarray]:
+        """Rows of several array fields in one call: `{name: rows}` to `{name: ndarray}`.
+
+        `rows` is a slice, a list of slices or `(start, stop)` pairs (the ranges' rows
+        concatenated in request order), or an integer or boolean index array (rows gathered in
+        the given order, repeats allowed). Ranges of each field are merged when they lie within
+        one chunk of each other, and all reads of the call run concurrently, so a query step of
+        many small ranges costs about one round trip on object storage.
+        """
+        from ._read import read_rows
+
+        return read_rows(self, request)
 
     def __getitem__(self, name: str) -> Any:
         """A lazy handle: `zarr.Array` for arrays, an unloaded xarray object for xarray fields."""
@@ -801,13 +845,23 @@ class Record(Directory):
             time.sleep(delay)
             delay = min(delay * 2, 0.5)
 
-    def write(self, name: str, value: Any, *, codec: str | None = None, dims: tuple[str, ...] | None = None) -> None:
+    def write(
+        self,
+        name: str,
+        value: Any,
+        *,
+        codec: str | None = None,
+        dims: tuple[str, ...] | None = None,
+        layout: Layout | None = None,
+    ) -> None:
         """Store `value` as field `name`, replacing any earlier value.
 
         Allowed inside `build`, and on finished workspace records (`mutable = True`); elsewhere it
         raises `ReadOnlyError`. The codec follows the value's type unless given; `dims` overrides
-        the dimension names derived from the field annotation. An array written over a field
-        created by `append` replaces its rows and stays appendable.
+        the dimension names derived from the field annotation. `layout` sets chunks and shards of
+        an array field (else the type's `layouts`, else the codec's default); it does not change
+        the key. An array written over a field created by `append` replaces its rows and stays
+        appendable.
         """
         _validate_name(name)
         annotation = type(self)._typed_fields().get(name)
@@ -818,17 +872,27 @@ class Record(Directory):
         chosen = get_codec(codec) if codec else codec_for(value)
         if codec is None and chosen.name in type(self).codecs:
             chosen = get_codec(type(self).codecs[chosen.name])
+        options = self._layout_option(name, chosen, layout)
         with self._edit() as fields:
             self._check_owner(name)
             old = fields.get(name)
             if old is not None and old.get("append") and codec is None and chosen.name == old["codec"]:
                 chosen.delete(self._dir, name, old)
-                fields[name] = {"codec": chosen.name, **chosen.append(self._dir, name, value, dims=dims)}
+                fields[name] = {"codec": chosen.name, **chosen.append(self._dir, name, value, dims=dims, **options)}
                 return
             if old is not None and old["codec"] != chosen.name:
                 get_codec(old["codec"]).delete(self._dir, name, old)
-            info = chosen.write(self._dir, name, value, dims=dims)
+            info = chosen.write(self._dir, name, value, dims=dims, **options)
             fields[name] = {"codec": chosen.name, **info}
+
+    def _layout_option(self, name: str, codec: Any, given: Layout | None) -> dict:
+        """`{"layout": ...}` for a codec that takes layouts, `{}` otherwise; an explicit layout
+        for a codec without layouts raises."""
+        if not codec.takes_layout:
+            if given is not None:
+                raise TypeError(f"{name}: codec {codec.name!r} stores no chunks or shards; drop layout=")
+            return {}
+        return {"layout": resolve_layout(name, given, type(self).layouts)}
 
     def append(
         self,
@@ -836,7 +900,7 @@ class Record(Directory):
         values: Any,
         *,
         dims: tuple[str, ...] | None = None,
-        chunk: int = 1024,
+        layout: Layout | None = None,
         codec: str | None = None,
     ) -> None:
         """Append rows (axis 0) to array field `name`, creating it on first use. With `in_place`
@@ -844,8 +908,9 @@ class Record(Directory):
         accept appends after the build too.
 
         A new field uses `codec`, else the record's `codecs["ndarray"]`, else zarr (`ndarray`);
-        later appends keep the field's codec. Rows must match the trailing shape and are cast to
-        the stored dtype.
+        later appends keep the field's codec and layout. `layout` (else the type's `layouts`, else
+        128 KB chunks without shards) applies when the field is created. Rows must match the
+        trailing shape and are cast to the stored dtype.
         """
         _validate_name(name)
         annotation = type(self)._typed_fields().get(name)
@@ -859,7 +924,8 @@ class Record(Directory):
             if old is not None and codec is not None and codec != old["codec"]:
                 raise ValueError(f"{name!r} is appended with codec {old['codec']!r}, not {codec!r}")
             chosen = get_codec(old["codec"] if old is not None else codec or type(self).codecs.get("ndarray", "ndarray"))
-            fields[name] = {"codec": chosen.name, **chosen.append(self._dir, name, values, dims=dims, chunk=chunk)}
+            options = self._layout_option(name, chosen, layout)
+            fields[name] = {"codec": chosen.name, **chosen.append(self._dir, name, values, dims=dims, **options)}
 
     def delete_field(self, name: str) -> None:
         """Remove field `name` (inside `build`, or on a workspace record); also `del record.name`."""

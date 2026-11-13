@@ -20,6 +20,7 @@ from .errors import (
 )
 from .external import DeltaRef, ParquetRef, SnapshotChanged
 from .index import reindex
+from .layout import Layout
 from ._signature import transient
 from ._stages import Progress, Stage, StageOrderError, StageProgress, Stages
 from ._record import Record
@@ -67,6 +68,7 @@ __all__ = [
     "DimsError",
     "Image",
     "KeyCollision",
+    "Layout",
     "Level",
     "NodeId",
     "ParquetRef",
